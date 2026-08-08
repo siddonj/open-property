@@ -14,6 +14,8 @@ import type {
   NewLease,
   NewWorkOrder,
   NewVendor,
+  IncomeReport,
+  MaintenanceReport,
 } from "../types";
 
 export interface AppSettings {
@@ -250,6 +252,26 @@ export function useAppState() {
     await api("DELETE", `/api/work-orders/${id}`);
   }, []);
 
+  // Reports ──────────────────────────────────────────────────────
+
+  const getIncomeReport = useCallback(async (params?: { from?: string; to?: string }): Promise<IncomeReport> => {
+    const qs = new URLSearchParams();
+    if (params?.from) qs.set("from", params.from);
+    if (params?.to) qs.set("to", params.to);
+    const path = qs.toString() ? `/api/reports/income?${qs.toString()}` : "/api/reports/income";
+    return api<IncomeReport>("GET", path);
+  }, []);
+
+  const getMaintenanceReport = useCallback(async (params?: { from?: string; to?: string; property_id?: number; vendor_id?: number }): Promise<MaintenanceReport> => {
+    const qs = new URLSearchParams();
+    if (params?.from) qs.set("from", params.from);
+    if (params?.to) qs.set("to", params.to);
+    if (params?.property_id) qs.set("property_id", String(params.property_id));
+    if (params?.vendor_id) qs.set("vendor_id", String(params.vendor_id));
+    const path = qs.toString() ? `/api/reports/maintenance?${qs.toString()}` : "/api/reports/maintenance";
+    return api<MaintenanceReport>("GET", path);
+  }, []);
+
   return {
     // data
     properties, vendors, settings,
@@ -271,6 +293,8 @@ export function useAppState() {
     createVendor, updateVendor, deleteVendor,
     // work orders
     listWorkOrders, createWorkOrder, updateWorkOrder, deleteWorkOrder,
+    // reports
+    getIncomeReport, getMaintenanceReport,
   };
 }
 

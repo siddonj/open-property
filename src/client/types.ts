@@ -208,6 +208,31 @@ export interface DashboardSummary {
   }[];
 }
 
+export interface IncomeReportMonth {
+  period: string;
+  charged: number;
+  collected: number;
+  outstanding: number;
+}
+
+export interface MaintenanceReportMonth {
+  period: string;
+  work_order_count: number;
+  total_cost: number;
+}
+
+export interface IncomeReport {
+  from: string;
+  to: string;
+  months: IncomeReportMonth[];
+}
+
+export interface MaintenanceReport {
+  from: string;
+  to: string;
+  months: MaintenanceReportMonth[];
+}
+
 // ── Input types for mutations ──────────────────────────────────────
 
 export type NewProperty = Partial<Omit<Property, "id" | "created_at" | "unit_count" | "occupied_count">> & { name: string };

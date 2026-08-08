@@ -859,6 +859,63 @@ app.put("/api/settings", async (c) => {
   return c.json({ settings: out });
 });
 
+// ── Reports ────────────────────────────────────────────────────────
+
+const PERIOD_RE = /^\d{4}-\d{2}$/;
+
+function periodRange(c: Context): { from: string; to: string } | null {
+  const now = new Date().toISOString().slice(0, 7);
+  const to = c.req.query("to") || now;
+  const from = c.req.query("from") || addMonthsSql(to, -11);
+  if (!PERIOD_RE.test(from) || !PERIOD_RE.test(to)) return null;
+  return { from, to };
+}
+
+function addMonthsSql(period: string, delta: number): string {
+  const [y, m] = period.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+app.get("/api/reports/income", async (c) => {
+  const range = periodRange(c);
+  if (!range) return c.json({ error: "from/to must be 'YYYY-MM'" }, 400);
+  const rows = await query(
+    `SELECT period,
+       SUM(amount) as charged,
+       SUM(amount_paid) as collected,
+       SUM(amount - amount_paid) as outstanding
+     FROM rent_charges
+     WHERE period >= ? AND period <= ?
+     GROUP BY period
+     ORDER BY period`,
+    [range.from, range.to],
+  );
+  return c.json({ from: range.from, to: range.to, months: rows });
+});
+
+app.get("/api/reports/maintenance", async (c) => {
+  const range = periodRange(c);
+  if (!range) return c.json({ error: "from/to must be 'YYYY-MM'" }, 400);
+  const propertyId = intParam(c.req.query("property_id"));
+  const vendorId = intParam(c.req.query("vendor_id"));
+  const where: string[] = ["w.status = 'completed'", "w.completed_at IS NOT NULL", "strftime('%Y-%m', w.completed_at) >= ?", "strftime('%Y-%m', w.completed_at) <= ?"];
+  const params: unknown[] = [range.from, range.to];
+  if (propertyId) { where.push("w.property_id = ?"); params.push(propertyId); }
+  if (vendorId) { where.push("w.vendor_id = ?"); params.push(vendorId); }
+  const rows = await query(
+    `SELECT strftime('%Y-%m', w.completed_at) as period,
+       COUNT(*) as work_order_count,
+       SUM(COALESCE(w.cost, 0)) as total_cost
+     FROM work_orders w
+     WHERE ${where.join(" AND ")}
+     GROUP BY period
+     ORDER BY period`,
+    params,
+  );
+  return c.json({ from: range.from, to: range.to, months: rows });
+});
+
 // ── Health ─────────────────────────────────────────────────────────
 
 app.get("/api/health", (c) => c.json({ ok: true }));
