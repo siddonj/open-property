@@ -1,5 +1,10 @@
-<svg viewBox="0 0 180 180" xmlns="http://www.w3.org/2000/svg">
-  <rect width="180" height="180" rx="36" fill="#16a34a"/>
-  <path d="M40 84 L90 44 L140 84 L140 142 L106 142 L106 108 L74 108 L74 142 L40 142 Z" fill="#fff"/>
-  <rect x="84" y="120" width="12" height="22" fill="#16a34a"/>
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <title>ResiQ</title>
+  <rect x="16" y="16" width="168" height="168" rx="26" fill="#0D1F40"/>
+  <circle cx="100" cy="92" r="48" fill="none" stroke="#FFFFFF" stroke-width="14"/>
+  <line x1="132" y1="122" x2="150" y2="142" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round"/>
+  <rect x="84"  y="76" width="12" height="12" rx="2" fill="#0FA882"/>
+  <rect x="100" y="76" width="12" height="12" rx="2" fill="#0FA882"/>
+  <rect x="84"  y="92" width="12" height="12" rx="2" fill="#0FA882"/>
+  <rect x="100" y="92" width="12" height="12" rx="2" fill="#0FA882"/>
 </svg>

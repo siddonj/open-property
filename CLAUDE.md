@@ -1,0 +1,51 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+pnpm install
+pnpm dev          # applies D1 schema, then runs Vite (:5173) + Wrangler (:8787) concurrently
+pnpm db:migrate   # re-apply src/server/schema.sql to the local D1 database
+pnpm typecheck    # tsc --noEmit
+pnpm build        # vite build -> dist/
+```
+
+There is no test suite and no lint script configured in `package.json`. `pnpm typecheck` is the only automated check — run it after any change.
+
+To reset local data, re-run `pnpm db:migrate` (schema.sql re-seeds sample properties/units/vendors).
+
+## Architecture
+
+Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLite) database. In dev, Vite proxies `/api/*` to Wrangler on :8787 (see `vite.config.ts`); in production both are served by the same Worker.
+
+- `src/server/index.ts` — every API route lives in this one Hono file (~870 lines), organized in commented sections per entity (Properties, Units, Tenants, Leases, Rent, Maintenance, Vendors, Settings). New endpoints should follow the existing section, not create new files, unless the file grows unreasonably.
+- `src/server/db.ts` — re-exports `initDB`/`query`/`get`/`run` from `@clawnify/db`, the D1 adapter package. All DB access goes through these three functions; there is no ORM.
+- `src/server/schema.sql` — full schema + seed data (3 properties, 5 units, 3 vendors). Applied fresh on every `pnpm dev` via `db:migrate`.
+- `src/client/app.tsx` — shell: renders `Sidebar` + the active page based on `route.name`, wrapped in `AppContext.Provider`.
+- `src/client/hooks/use-router.ts` — hand-rolled pushState router. Routes are a discriminated union (`Route` type); add new routes here (both the `parse()` regex and the `Route` union member) and wire the page in `app.tsx`.
+- `src/client/hooks/use-app-state.ts` — central data-fetching hook; owns loading/error state consumed via `AppContext`.
+- `src/client/components/<domain>/` — one directory per feature (dashboard, properties, tenants, leases, rent, maintenance, settings), each with list/detail/dialog components colocated.
+- `src/client/components/ui/` — vendored shadcn/ui primitives (Radix-based). Treat as generated; prefer composing over editing unless fixing a real bug.
+- `src/client/lib/utils.ts` — `cn()` class helper plus shared color/date/money/period formatting helpers used across components.
+
+### API conventions (server)
+
+- Zod schemas per entity (e.g. `PropertyInput`) validate POST/PATCH bodies via the local `parseJson()` helper, which returns `{ ok, data | error }`.
+- `intParam()` parses and validates numeric route params, returning `null` on failure — callers respond `400` immediately.
+- `buildUpdate()` turns a partial-fields object into `SET` clauses + params for PATCH endpoints, skipping `undefined` values (so partial updates only touch provided fields).
+- List endpoints often join in computed aggregates (e.g. `unit_count`, `occupied_count` on `/api/properties`) via correlated subqueries rather than separate calls.
+
+### Client conventions
+
+- No client-side router library and no server-state library (no TanStack Query/SWR) — data fetching and caching is centralized in `use-app-state.ts`.
+- Routing is a closed union matched exhaustively in `app.tsx`; there is no catch-all except the explicit `not-found` route.
+
+## Deployment
+
+Deploys as a Cloudflare Worker with a D1 binding (`DB` → database `open-property-db`, see `wrangler.toml`). Built on the Clawnify template format (`clawnify.json` defines deploy-time prompts); `clawnify deploy` handles provisioning if the Clawnify CLI is installed, otherwise wire Wrangler + D1 directly.
+
+## Scope boundaries
+
+Per the README, these are intentionally out of scope for this template — don't add them without an explicit ask: listing syndication, real credit/background screening, SMS/email blast sending, online payment processing, public tenant/owner portals.

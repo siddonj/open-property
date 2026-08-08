@@ -1,10 +1,10 @@
-<img src="readme-banner.png" alt="Open Property preview" width="100%" />
+<img src="readme-banner.png" alt="ResiQ Property preview" width="100%" />
 
-# Open Property
+# ResiQ Property
 
 [![Deploy with Clawnify](https://app.clawnify.com/deploy-button.svg)](https://app.clawnify.com/deploy?repo=clawnify/open-property)
 
-Open-source **property management software** — a self-hosted, cloud-based alternative to TenantCloud, AppFolio, Buildium, and Propertyware for landlords, small property managers, and apartment / multi-family back-office teams.
+**ResiQ Property management software** — a self-hosted, cloud-based alternative to TenantCloud, AppFolio, Buildium, and Propertyware for landlords, small property managers, and apartment / multi-family back-office teams.
 
 Rental property management with everything you need to run a portfolio: properties and units, tenants and leases, rent collection and a ledger, maintenance work orders, and a vendor directory.
 

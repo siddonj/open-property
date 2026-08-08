@@ -37,40 +37,59 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --font-display: "Syne", system-ui, -apple-system, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, monospace;
 }
 
 :root {
-  --background: oklch(0.99 0.005 150);
-  --foreground: oklch(0.18 0.02 240);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.02 240);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.02 240);
-  --primary: oklch(0.55 0.16 150);
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.96 0.01 150);
-  --secondary-foreground: oklch(0.22 0.03 240);
-  --muted: oklch(0.96 0.005 150);
-  --muted-foreground: oklch(0.52 0.02 240);
-  --accent: oklch(0.94 0.03 150);
-  --accent-foreground: oklch(0.22 0.06 150);
-  --destructive: oklch(0.6 0.22 27);
-  --destructive-foreground: oklch(0.99 0 0);
-  --border: oklch(0.91 0.01 150);
-  --input: oklch(0.91 0.01 150);
-  --ring: oklch(0.55 0.16 150);
+  /* ResiQ palette */
+  --navy-deep: #081226;
+  --navy: #0D1F40;
+  --navy-panel: #12294F;
+  --navy-line: #1E3A66;
+  --teal: #0FA882;
+  --teal-dim: rgba(15, 168, 130, 0.14);
+  --amber: #E8A33D;
+  --red: #E05C5C;
+  --paper: #F5F7FA;
+  --gray-light: #C3CDDA;
+  --gray: #8896A8;
+  --cloud: #EEF2F7;
+
+  --background: var(--cloud);
+  --foreground: var(--navy);
+  --card: #FFFFFF;
+  --card-foreground: var(--navy);
+  --popover: #FFFFFF;
+  --popover-foreground: var(--navy);
+  --primary: var(--navy);
+  --primary-foreground: #FFFFFF;
+  --secondary: var(--cloud);
+  --secondary-foreground: var(--navy);
+  --muted: var(--cloud);
+  --muted-foreground: var(--gray);
+  --accent: var(--teal-dim);
+  --accent-foreground: var(--navy);
+  --destructive: var(--red);
+  --destructive-foreground: #FFFFFF;
+  --border: oklch(0.91 0.01 240);
+  --input: oklch(0.91 0.01 240);
+  --ring: var(--teal);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0.005 150);
-  --sidebar-foreground: oklch(0.22 0.02 240);
-  --sidebar-accent: oklch(0.94 0.04 150);
-  --sidebar-accent-foreground: oklch(0.3 0.12 150);
-  --sidebar-border: oklch(0.91 0.01 150);
+  --sidebar: var(--navy);
+  --sidebar-foreground: var(--paper);
+  --sidebar-accent: var(--teal-dim);
+  --sidebar-accent-foreground: var(--teal);
+  --sidebar-border: var(--navy-line);
 }
 
 @layer base {
   * { @apply border-border; }
   body {
     @apply bg-background text-foreground;
-    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
   }
 }
