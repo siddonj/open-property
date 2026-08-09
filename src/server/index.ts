@@ -935,6 +935,35 @@ app.get("/api/reports/delinquency", async (c) => {
   return c.json({ rows });
 });
 
+app.get("/api/reports/occupancy", async (c) => {
+  const range = periodRange(c);
+  if (!range) return c.json({ error: "from/to must be 'YYYY-MM'" }, 400);
+  const totalRow = await get<{ n: number }>("SELECT COUNT(*) as n FROM units");
+  const totalUnits = totalRow?.n ?? 0;
+  const months: { period: string; occupied_units: number; total_units: number; occupancy_rate: number }[] = [];
+  let period = range.from;
+  while (period <= range.to) {
+    const row = await get<{ n: number }>(
+      `SELECT COUNT(DISTINCT u.id) as n
+       FROM units u
+       JOIN leases l ON l.unit_id = u.id
+       WHERE l.status IN ('active', 'ended')
+         AND l.start_date <= date(? || '-28')
+         AND l.end_date >= date(? || '-01')`,
+      [period, period],
+    );
+    const occupied = row?.n ?? 0;
+    months.push({
+      period,
+      occupied_units: occupied,
+      total_units: totalUnits,
+      occupancy_rate: totalUnits ? Math.round((occupied / totalUnits) * 100) : 0,
+    });
+    period = addMonthsSql(period, 1);
+  }
+  return c.json({ from: range.from, to: range.to, months });
+});
+
 // ── Health ─────────────────────────────────────────────────────────
 
 app.get("/api/health", (c) => c.json({ ok: true }));
