@@ -3,6 +3,7 @@ import { RentRollTab } from "./rent-roll-tab";
 import { IncomeTab } from "./income-tab";
 import { MaintenanceTab } from "./maintenance-tab";
 import { DelinquencyTab } from "./delinquency-tab";
+import { OccupancyTab } from "./occupancy-tab";
 
 export function ReportsPage() {
   return (
@@ -19,6 +20,7 @@ export function ReportsPage() {
             <TabsTrigger value="income">Income</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
             <TabsTrigger value="delinquency">Delinquency</TabsTrigger>
+            <TabsTrigger value="occupancy">Occupancy</TabsTrigger>
           </TabsList>
 
           <TabsContent value="rent-roll" className="mt-4">
@@ -32,6 +34,9 @@ export function ReportsPage() {
           </TabsContent>
           <TabsContent value="delinquency" className="mt-4">
             <DelinquencyTab />
+          </TabsContent>
+          <TabsContent value="occupancy" className="mt-4">
+            <OccupancyTab />
           </TabsContent>
         </Tabs>
       </div>

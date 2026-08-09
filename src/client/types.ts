@@ -233,6 +233,19 @@ export interface MaintenanceReport {
   months: MaintenanceReportMonth[];
 }
 
+export interface OccupancyReportMonth {
+  period: string;
+  occupied_units: number;
+  total_units: number;
+  occupancy_rate: number;
+}
+
+export interface OccupancyReport {
+  from: string;
+  to: string;
+  months: OccupancyReportMonth[];
+}
+
 export interface DelinquencyRow {
   id: number;
   lease_id: number;

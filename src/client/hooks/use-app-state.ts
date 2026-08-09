@@ -17,6 +17,7 @@ import type {
   IncomeReport,
   MaintenanceReport,
   DelinquencyRow,
+  OccupancyReport,
 } from "../types";
 
 export interface AppSettings {
@@ -277,6 +278,14 @@ export function useAppState() {
     return api<{ rows: DelinquencyRow[] }>("GET", "/api/reports/delinquency");
   }, []);
 
+  const getOccupancyReport = useCallback(async (params?: { from?: string; to?: string }): Promise<OccupancyReport> => {
+    const qs = new URLSearchParams();
+    if (params?.from) qs.set("from", params.from);
+    if (params?.to) qs.set("to", params.to);
+    const path = qs.toString() ? `/api/reports/occupancy?${qs.toString()}` : "/api/reports/occupancy";
+    return api<OccupancyReport>("GET", path);
+  }, []);
+
   return {
     // data
     properties, vendors, settings,
@@ -299,7 +308,7 @@ export function useAppState() {
     // work orders
     listWorkOrders, createWorkOrder, updateWorkOrder, deleteWorkOrder,
     // reports
-    getIncomeReport, getMaintenanceReport, getDelinquencyReport,
+    getIncomeReport, getMaintenanceReport, getDelinquencyReport, getOccupancyReport,
   };
 }
 
