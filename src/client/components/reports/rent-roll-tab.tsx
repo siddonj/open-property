@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/context";
-import { formatDate, formatMoney } from "@/lib/utils";
+import { downloadCsv, formatDate, formatMoney } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Download } from "lucide-react";
 import type { Lease } from "@/types";
 
 export function RentRollTab() {
@@ -41,6 +43,23 @@ export function RentRollTab() {
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => downloadCsv("rent-roll.csv", leases, [
+            { key: "property_name", label: "Property" },
+            { key: "unit_name", label: "Unit" },
+            { key: "tenant_first_name", label: "Tenant first name" },
+            { key: "tenant_last_name", label: "Tenant last name" },
+            { key: "start_date", label: "Start" },
+            { key: "end_date", label: "End" },
+            { key: "monthly_rent", label: "Monthly rent" },
+          ])}
+        >
+          <Download className="mr-1 h-4 w-4" /> Export CSV
+        </Button>
+      </div>
       {groups.map(([propertyName, group]) => (
         <Card key={propertyName}>
           <div className="flex items-center justify-between border-b p-4">

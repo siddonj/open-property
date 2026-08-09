@@ -71,3 +71,20 @@ export function daysBetween(a: string, b: string): number {
   const db = new Date(`${b}T00:00:00`).getTime();
   return Math.round((db - da) / 86_400_000);
 }
+
+export function downloadCsv<T>(
+  filename: string,
+  rows: T[],
+  columns: { key: keyof T; label: string }[],
+): void {
+  const escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const header = columns.map((c) => escape(c.label)).join(",");
+  const body = rows.map((r) => columns.map((c) => escape(r[c.key])).join(",")).join("\n");
+  const blob = new Blob([header + "\n" + body], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/context";
-import { formatMoney, formatPeriod } from "@/lib/utils";
+import { downloadCsv, formatMoney, formatPeriod } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Download } from "lucide-react";
 import type { IncomeReportMonth } from "@/types";
 
 export function IncomeTab() {
@@ -36,9 +38,23 @@ export function IncomeTab() {
 
   return (
     <Card>
-      <div className="border-b p-4">
-        <h2 className="text-sm font-semibold">Last 12 months</h2>
-        <p className="text-xs text-muted-foreground">Rent charged, collected, and outstanding per month</p>
+      <div className="flex items-center justify-between border-b p-4">
+        <div>
+          <h2 className="text-sm font-semibold">Last 12 months</h2>
+          <p className="text-xs text-muted-foreground">Rent charged, collected, and outstanding per month</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => downloadCsv("income-report.csv", months, [
+            { key: "period", label: "Month" },
+            { key: "charged", label: "Charged" },
+            { key: "collected", label: "Collected" },
+            { key: "outstanding", label: "Outstanding" },
+          ])}
+        >
+          <Download className="mr-1 h-4 w-4" /> Export CSV
+        </Button>
       </div>
       <Table>
         <TableHeader>

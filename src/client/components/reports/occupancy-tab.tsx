@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/context";
-import { formatPeriod } from "@/lib/utils";
+import { downloadCsv, formatPeriod } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Download } from "lucide-react";
 import type { OccupancyReportMonth } from "@/types";
 
 export function OccupancyTab() {
@@ -35,9 +37,23 @@ export function OccupancyTab() {
 
   return (
     <Card>
-      <div className="border-b p-4">
-        <h2 className="text-sm font-semibold">Last 12 months</h2>
-        <p className="text-xs text-muted-foreground">Occupied units and occupancy rate per month</p>
+      <div className="flex items-center justify-between border-b p-4">
+        <div>
+          <h2 className="text-sm font-semibold">Last 12 months</h2>
+          <p className="text-xs text-muted-foreground">Occupied units and occupancy rate per month</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => downloadCsv("occupancy-report.csv", months, [
+            { key: "period", label: "Month" },
+            { key: "occupied_units", label: "Occupied" },
+            { key: "total_units", label: "Total units" },
+            { key: "occupancy_rate", label: "Occupancy rate" },
+          ])}
+        >
+          <Download className="mr-1 h-4 w-4" /> Export CSV
+        </Button>
       </div>
       <Table>
         <TableHeader>

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/context";
-import { formatMoney, formatPeriod } from "@/lib/utils";
+import { downloadCsv, formatMoney, formatPeriod } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Download } from "lucide-react";
 import type { MaintenanceReportMonth } from "@/types";
 
 const ALL = "all";
@@ -60,6 +62,17 @@ export function MaintenanceTab() {
               {app.vendors.map((v) => <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>)}
             </SelectContent>
           </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => downloadCsv("maintenance-report.csv", months, [
+              { key: "period", label: "Month" },
+              { key: "work_order_count", label: "Work orders" },
+              { key: "total_cost", label: "Total cost" },
+            ])}
+          >
+            <Download className="mr-1 h-4 w-4" /> Export CSV
+          </Button>
         </div>
       </div>
 

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/context";
-import { formatDate, formatMoney } from "@/lib/utils";
+import { downloadCsv, formatDate, formatMoney } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Download } from "lucide-react";
 import type { DelinquencyRow } from "@/types";
 
 const BUCKETS = [
@@ -46,6 +48,23 @@ export function DelinquencyTab() {
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => downloadCsv("delinquency-report.csv", rows, [
+            { key: "tenant_first_name", label: "Tenant first name" },
+            { key: "tenant_last_name", label: "Tenant last name" },
+            { key: "property_name", label: "Property" },
+            { key: "unit_name", label: "Unit" },
+            { key: "due_date", label: "Due date" },
+            { key: "days_overdue", label: "Days overdue" },
+            { key: "balance", label: "Balance" },
+          ])}
+        >
+          <Download className="mr-1 h-4 w-4" /> Export CSV
+        </Button>
+      </div>
       {buckets.map((b) => (
         <Card key={b.label}>
           <div className="flex items-center justify-between border-b p-4">
