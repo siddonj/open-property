@@ -916,6 +916,25 @@ app.get("/api/reports/maintenance", async (c) => {
   return c.json({ from: range.from, to: range.to, months: rows });
 });
 
+app.get("/api/reports/delinquency", async (c) => {
+  const rows = await query(
+    `SELECT
+       rc.id, rc.lease_id, rc.due_date, rc.amount, rc.amount_paid,
+       (rc.amount - rc.amount_paid) as balance,
+       CAST(julianday('now') - julianday(rc.due_date) AS INTEGER) as days_overdue,
+       l.unit_id, u.name as unit_name, p.id as property_id, p.name as property_name,
+       t.first_name as tenant_first_name, t.last_name as tenant_last_name
+     FROM rent_charges rc
+     JOIN leases l ON l.id = rc.lease_id
+     LEFT JOIN units u ON u.id = l.unit_id
+     LEFT JOIN properties p ON p.id = u.property_id
+     LEFT JOIN tenants t ON t.id = l.primary_tenant_id
+     WHERE rc.status != 'waived' AND rc.amount_paid < rc.amount AND rc.due_date < date('now')
+     ORDER BY days_overdue DESC`,
+  );
+  return c.json({ rows });
+});
+
 // ── Health ─────────────────────────────────────────────────────────
 
 app.get("/api/health", (c) => c.json({ ok: true }));
