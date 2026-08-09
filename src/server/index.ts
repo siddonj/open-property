@@ -947,8 +947,8 @@ app.get("/api/reports/occupancy", async (c) => {
       `SELECT COUNT(DISTINCT u.id) as n
        FROM units u
        JOIN leases l ON l.unit_id = u.id
-       WHERE l.status IN ('active', 'ended')
-         AND l.start_date <= date(? || '-28')
+       WHERE l.status != 'cancelled'
+         AND l.start_date <= date(? || '-01', '+1 month', '-1 day')
          AND l.end_date >= date(? || '-01')`,
       [period, period],
     );
