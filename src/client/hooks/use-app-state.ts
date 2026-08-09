@@ -16,6 +16,7 @@ import type {
   NewVendor,
   IncomeReport,
   MaintenanceReport,
+  DelinquencyRow,
 } from "../types";
 
 export interface AppSettings {
@@ -272,6 +273,10 @@ export function useAppState() {
     return api<MaintenanceReport>("GET", path);
   }, []);
 
+  const getDelinquencyReport = useCallback(async (): Promise<{ rows: DelinquencyRow[] }> => {
+    return api<{ rows: DelinquencyRow[] }>("GET", "/api/reports/delinquency");
+  }, []);
+
   return {
     // data
     properties, vendors, settings,
@@ -294,7 +299,7 @@ export function useAppState() {
     // work orders
     listWorkOrders, createWorkOrder, updateWorkOrder, deleteWorkOrder,
     // reports
-    getIncomeReport, getMaintenanceReport,
+    getIncomeReport, getMaintenanceReport, getDelinquencyReport,
   };
 }
 

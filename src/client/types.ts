@@ -233,6 +233,22 @@ export interface MaintenanceReport {
   months: MaintenanceReportMonth[];
 }
 
+export interface DelinquencyRow {
+  id: number;
+  lease_id: number;
+  due_date: string;
+  amount: number;
+  amount_paid: number;
+  balance: number;
+  days_overdue: number;
+  unit_id: number | null;
+  unit_name: string | null;
+  property_id: number | null;
+  property_name: string | null;
+  tenant_first_name: string | null;
+  tenant_last_name: string | null;
+}
+
 // ── Input types for mutations ──────────────────────────────────────
 
 export type NewProperty = Partial<Omit<Property, "id" | "created_at" | "unit_count" | "occupied_count">> & { name: string };
