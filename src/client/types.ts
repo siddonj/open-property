@@ -212,6 +212,7 @@ export interface WorkOrder {
   tenant_last_name?: string | null;
   vendor_name?: string | null;
   vendor_color?: string | null;
+  bill_id?: number | null;
 }
 
 export type AccountType = "income" | "expense" | "asset";

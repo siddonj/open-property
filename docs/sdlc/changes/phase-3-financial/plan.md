@@ -2,7 +2,7 @@
 
 Intent: [`intent.md`](./intent.md)
 Spec: [`spec.md`](./spec.md)
-Status: Approved 2026-10-29 (revised); Slices 0, A, B, and C built; D next
+Status: Approved 2026-10-29 (revised); Slices 0–D built; wrap-up next
 
 Delivered as five slices, in order. Each slice ends with typecheck, build,
 curl, and browser checks before the next starts.
@@ -189,3 +189,17 @@ curl, and browser checks before the next starts.
   - **The tab lists every active account**, so a budget can be added to any of
     them; there's no add-account step.
 
+- **2026-10-30 — Slice D built.** The duplicate-line 409 already existed from
+  Slice A (`validateLines`); this slice adds `bill_id` to work-order reads, the
+  **Record as expense** button, and the bill-dialog prefill. Checked with curl
+  (bill_id appears once linked, a second bill for the same work order returns
+  409, the P&L shows the line under 6520) and in the browser (prefill of
+  property, vendor, unit, cost, 6520, and completion date; a $0.29 cost saves
+  as 29 cents; the button is replaced by "Recorded as an expense on bill #N").
+  Notes:
+  - The button reads the **saved** work order. Completing it and entering the
+    cost need a save first, and clicking the button discards unsaved edits.
+  - A work order with no property can't become a bill, so the button is hidden.
+  - The maintenance and property pages now pass `onSaved` to the work-order
+    dialog. They previously reloaded only when it closed, which happens before
+    the bill saves, so the list kept offering a duplicate.

@@ -273,6 +273,7 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
         onOpenChange={(o) => { setWoDialogOpen(o); if (!o) load(); }}
         workOrder={editingWo}
         defaults={{ property_id: property.id }}
+        onSaved={load}
       />
     </div>
   );

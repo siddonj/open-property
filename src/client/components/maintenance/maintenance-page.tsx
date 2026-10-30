@@ -253,6 +253,7 @@ export function MaintenancePage() {
         open={dialogOpen}
         onOpenChange={(o) => { setDialogOpen(o); if (!o) load(); }}
         workOrder={editing}
+        onSaved={load}
       />
       <RecurringTasksDialog open={recurringOpen} onOpenChange={setRecurringOpen} />
     </div>

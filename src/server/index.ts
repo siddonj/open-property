@@ -813,7 +813,8 @@ const WO_SELECT = `
     p.name as property_name, p.color as property_color,
     u.name as unit_name,
     t.first_name as tenant_first_name, t.last_name as tenant_last_name,
-    v.name as vendor_name, v.color as vendor_color
+    v.name as vendor_name, v.color as vendor_color,
+    (SELECT bl.bill_id FROM bill_lines bl WHERE bl.work_order_id = w.id) as bill_id
   FROM work_orders w
   LEFT JOIN properties p ON p.id = w.property_id
   LEFT JOIN units u ON u.id = w.unit_id
