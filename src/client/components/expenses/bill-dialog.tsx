@@ -15,7 +15,16 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   bill?: Bill;
   accounts: Account[];
+  /** Starting values for a new bill, e.g. from a completed work order. */
+  prefill?: BillPrefill;
   onSaved?: () => void;
+}
+
+export interface BillPrefill {
+  property_id: number;
+  vendor_id: number | null;
+  bill_date: string;
+  line: { description: string; unit_id: number | null; amount_cents: number; work_order_id: number; work_order_title: string };
 }
 
 interface LineDraft {
@@ -43,7 +52,7 @@ export function accountGroups(accounts: Account[]) {
 
 let nextKey = 1;
 
-export function BillDialog({ open, onOpenChange, bill, accounts, onSaved }: Props) {
+export function BillDialog({ open, onOpenChange, bill, accounts, prefill, onSaved }: Props) {
   const app = useApp();
   const [current, setCurrent] = useState<Bill | undefined>(bill);
   const [units, setUnits] = useState<Unit[]>([]);
@@ -64,9 +73,10 @@ export function BillDialog({ open, onOpenChange, bill, accounts, onSaved }: Prop
     if (!open) return;
     app.listUnits().then(setUnits).catch(() => setUnits([]));
     setCurrent(bill);
-    setPropertyId(bill ? String(bill.property_id) : "");
-    setVendorId(bill?.vendor_id ? String(bill.vendor_id) : NONE);
-    setBillDate(bill?.bill_date ?? toIsoDate(new Date()));
+    const start = bill ? undefined : prefill;
+    setPropertyId(bill ? String(bill.property_id) : start ? String(start.property_id) : "");
+    setVendorId(bill?.vendor_id ? String(bill.vendor_id) : start?.vendor_id ? String(start.vendor_id) : NONE);
+    setBillDate(bill?.bill_date ?? start?.bill_date ?? toIsoDate(new Date()));
     setDueDate(bill?.due_date ?? "");
     setReference(bill?.reference ?? "");
     setNotes(bill?.notes ?? "");
@@ -75,10 +85,13 @@ export function BillDialog({ open, onOpenChange, bill, accounts, onSaved }: Prop
           key: nextKey++, account_id: String(l.account_id), description: l.description,
           unit_id: l.unit_id ? String(l.unit_id) : NONE, amount: centsToInput(l.amount_cents), work_order_id: l.work_order_id,
         }))
-      : [blankLine()]);
+      : start
+        ? [{ ...blankLine(), description: start.line.description, unit_id: start.line.unit_id ? String(start.line.unit_id) : NONE,
+            amount: centsToInput(start.line.amount_cents), work_order_id: start.line.work_order_id }]
+        : [blankLine()]);
     setFormError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, bill]);
+  }, [open, bill, prefill]);
 
   const propertyUnits = useMemo(() => units.filter((u) => String(u.property_id) === propertyId), [units, propertyId]);
   const groups = useMemo(() => accountGroups(accounts), [accounts]);
@@ -90,6 +103,7 @@ export function BillDialog({ open, onOpenChange, bill, accounts, onSaved }: Prop
   const canSave = !readOnly && !!propertyId && !!billDate
     && lines.every((l, i) => l.account_id && l.description.trim() && (parsed[i] ?? 0) > 0);
   const money = (c: number) => formatCents(c, app.settings.currency);
+  const linkedTitle = current ? current.lines.find((x) => x.work_order_title)?.work_order_title : prefill?.line.work_order_title;
 
   const setLine = (key: number, patch: Partial<LineDraft>) =>
     setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
@@ -240,10 +254,8 @@ export function BillDialog({ open, onOpenChange, bill, accounts, onSaved }: Prop
               )}
               <span className="text-sm">Total <span className="ml-2 font-semibold tabular-nums">{money(total)}</span></span>
             </div>
-            {lines.some((l) => l.work_order_id) && current?.lines.some((x) => x.work_order_title) && (
-              <p className="text-xs text-muted-foreground">
-                Linked to work order "{current.lines.find((x) => x.work_order_title)?.work_order_title}".
-              </p>
+            {lines.some((l) => l.work_order_id) && linkedTitle && (
+              <p className="text-xs text-muted-foreground">Linked to work order "{linkedTitle}".</p>
             )}
           </div>
 

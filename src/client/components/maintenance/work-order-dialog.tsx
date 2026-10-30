@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/context";
 import { formatDate, formatMoney, toIsoDate } from "@/lib/utils";
 import { ApprovalBadge } from "./approval-badge";
+import { BillDialog, type BillPrefill } from "@/components/expenses/bill-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { ApprovalStatus, Unit, WorkOrder, WorkOrderPriority, WorkOrderStatus } from "@/types";
+import type { Account, ApprovalStatus, Unit, WorkOrder, WorkOrderPriority, WorkOrderStatus } from "@/types";
 
 interface Props {
   open: boolean;
@@ -51,6 +52,8 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
   const [saving, setSaving] = useState(false);
   // Shown inside the dialog: the app error banner sits behind the modal overlay.
   const [formError, setFormError] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [billPrefill, setBillPrefill] = useState<BillPrefill | undefined>();
 
   useEffect(() => {
     if (!open) return;
@@ -146,6 +149,32 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
   const needsApproval = threshold > 0 && estimateNum != null && estimateNum > threshold;
   const estimateChanged = (workOrder?.estimated_cost ?? null) !== estimateNum;
 
+  // D2: completed work with a cost becomes one linked bill line, so the P&L counts it once.
+  const canRecordExpense = !!workOrder && workOrder.status === "completed" && (workOrder.cost ?? 0) > 0
+    && workOrder.property_id != null && !workOrder.bill_id;
+
+  async function recordExpense() {
+    if (!workOrder || workOrder.property_id == null || workOrder.cost == null) return;
+    try {
+      if (!accounts.length) setAccounts(await app.listAccounts());
+      setBillPrefill({
+        property_id: workOrder.property_id,
+        vendor_id: workOrder.vendor_id,
+        bill_date: workOrder.completed_at?.slice(0, 10) ?? toIsoDate(new Date()),
+        line: {
+          description: workOrder.title,
+          unit_id: workOrder.unit_id,
+          amount_cents: Math.round(workOrder.cost * 100),
+          work_order_id: workOrder.id,
+          work_order_title: workOrder.title,
+        },
+      });
+      onOpenChange(false);
+    } catch (err) {
+      setFormError((err as Error).message);
+    }
+  }
+
   async function remove() {
     if (!workOrder) return;
     if (!confirm("Delete this work order?")) return;
@@ -159,6 +188,7 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
@@ -270,6 +300,9 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
               )}
             </div>
           )}
+          {workOrder?.bill_id && (
+            <p className="text-xs text-muted-foreground">Recorded as an expense on bill #{workOrder.bill_id}.</p>
+          )}
           {workOrder?.occurrence_date && (
             <p className="text-xs text-muted-foreground">
               Generated from a recurring task for {formatDate(workOrder.occurrence_date)}.
@@ -292,6 +325,9 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
               Delete
             </Button>
           )}
+          {canRecordExpense && (
+            <Button type="button" variant="outline" onClick={recordExpense}>Record as expense</Button>
+          )}
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button type="button" onClick={save} disabled={saving || !title.trim()}>
             {workOrder ? "Save changes" : "Create work order"}
@@ -299,5 +335,13 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <BillDialog
+      open={!!billPrefill}
+      onOpenChange={(o) => { if (!o) setBillPrefill(undefined); }}
+      accounts={accounts}
+      prefill={billPrefill}
+      onSaved={onSaved}
+    />
+    </>
   );
 }
