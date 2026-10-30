@@ -20,7 +20,7 @@ Rental property management with everything you need to run a portfolio: properti
 
 ### Properties & units
 - Property cards with type, address, color tag, occupancy snapshot
-- Per-property page with summary tiles, unit grid, and the property's work orders (open / completed / all, filterable by unit)
+- Per-property page with summary tiles, unit grid, a **Financials** card (income, expenses, and NOI linking to that property's P&L), and the property's work orders (open / completed / all, filterable by unit)
 - Units track bedrooms, bathrooms, square footage, market rent, and status (vacant / occupied / turnover / unavailable)
 
 ### Tenants
@@ -53,6 +53,21 @@ Rental property management with everything you need to run a portfolio: properti
 - Overdue work is labeled with days overdue; completion date is recorded automatically
 - **Recurring tasks** — weekly or monthly preventive-maintenance templates. "Generate due tasks" creates work orders for the next 14 days without duplicates; a missed stretch yields one overdue work order, not a backlog
 - **Approval threshold** — work orders whose estimate exceeds the threshold (Settings) need approval before they can be in progress or completed
+- **Record as expense** — a completed work order with a cost opens a prefilled bill linked to it; each work order can be billed once
+
+### Expenses
+- Bills from vendors, each with one or more lines coded to the chart of accounts (operating, below-NOI, or capital) and optionally to a unit
+- Tabs for unpaid / overdue / paid / all with counts and totals, plus property, vendor, account, and date-range filters
+- Record payments by date, method, and reference; voiding a payment keeps it on record. A bill with live payments is read-only, and one with any payment history can't be deleted
+- CSV export with a totals row
+- Properties and vendors with bills can't be deleted, so financial records are kept
+
+### Reports
+- Rent roll, delinquency, occupancy, and maintenance spend
+- **Income** — rent charged and collected by charge period, filterable by property
+- **Profit & loss** — monthly income and expenses by account, with operating, below-NOI, and capital groups and NOI. Expenses come from bill lines only (record work orders as expenses to include them)
+- **Budget** — annual amounts per property and account, edited inline, with actual, variance, and percent used
+- CSV export on each report
 
 ### Vendors & policy
 - Vendor directory by category (plumber / electrician / HVAC / handyman / cleaning / landscaping / general)
@@ -93,7 +108,7 @@ clawnify deploy
 
 Or wire it up to Cloudflare Workers + D1 directly using the bindings in `wrangler.toml` (binding `DB`, database name `open-property-db`).
 
-After deploying, apply the baseline schema and migrations to the remote database:
+After deploying, apply the baseline schema and migrations to the remote database. When upgrading an existing deployment, apply new migrations **before** deploying the new code — the API reads new tables (for example, work orders read `bill_lines`) and fails until they exist:
 
 ```bash
 wrangler d1 execute open-property-db --remote --file=src/server/schema.sql
@@ -119,6 +134,8 @@ migrations/         Numbered schema changes applied after the baseline
       leases/       Leases page, lease dialog, move-in/out checklist dialog
       rent/         Rent ledger + payment dialog
       maintenance/  Work orders board, work-order dialog, recurring tasks
+      expenses/     Bills list + bill dialog
+      reports/      Report tabs (rent roll, income, P&L, budget, ...)
       settings/     Vendors + rent policy defaults
       ui/           Vendored shadcn primitives
     hooks/          use-router, use-app-state

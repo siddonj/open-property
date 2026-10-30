@@ -29,7 +29,7 @@ There is no test suite and no lint script configured in `package.json`. `pnpm ty
 
 Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLite) database. In dev, Vite proxies `/api/*` to Wrangler on :8787 (see `vite.config.ts`); in production both are served by the same Worker.
 
-- `src/server/index.ts` — every API route lives in this one Hono file (~1,400 lines), organized in commented sections per entity (Properties, Units, Tenants, Leases, Lease checklists, Rent, Maintenance, Recurring tasks, Vendors, Applications, Dashboard, Settings, Reports). New endpoints should follow the existing section, not create new files, unless the file grows unreasonably.
+- `src/server/index.ts` — every API route lives in this one Hono file (~1,900 lines), organized in commented sections per entity (Properties, Units, Tenants, Leases, Lease checklists, Rent, Maintenance, Recurring tasks, Vendors, Applications, Accounts, Bills & payments, Dashboard, Settings, Reports, Budgets). New endpoints should follow the existing section, not create new files, unless the file grows unreasonably.
 - `src/server/db.ts` — re-exports `initDB`/`query`/`get`/`run` from `@clawnify/db`, the D1 adapter package. All DB access goes through these three functions; there is no ORM.
 - `src/server/schema.sql` — baseline schema + seed data (3 properties, 5 units, 3 vendors). Applied on every `pnpm dev` via `db:migrate`. Don't add columns here: `CREATE TABLE IF NOT EXISTS` can't alter existing databases.
 - `migrations/NNNN_<name>.sql` — schema changes after the baseline, applied once each by `wrangler d1 migrations apply` (tracked in `d1_migrations`). Remote databases need `wrangler d1 migrations apply open-property-db --remote`.
@@ -46,6 +46,12 @@ Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLit
 - `intParam()` parses and validates numeric route params, returning `null` on failure — callers respond `400` immediately.
 - `buildUpdate()` turns a partial-fields object into `SET` clauses + params for PATCH endpoints, skipping `undefined` values (so partial updates only touch provided fields).
 - List endpoints often join in computed aggregates (e.g. `unit_count`, `occupied_count` on `/api/properties`) via correlated subqueries rather than separate calls.
+
+### Money (server)
+
+- Phase 3 money columns (`bill_lines`, `bill_payments`, `budgets`) store **integer cents** (`*_cents` columns). Use cents for any new money column. Rent tables are still `REAL` dollars; reports convert each rent row with `CAST(ROUND(x * 100) AS INTEGER)` before summing.
+- Bills are written in steps and are only real once `complete = 1`. Every bill total, report, and payment must filter on it — reuse `billLineActuals()` for bill-line actuals rather than writing a new query.
+- The chart of accounts (`gl_accounts`) is seeded by `migrations/0003_phase3_financial.sql`; reports group by account `type` and `is_operating`.
 
 ### Client conventions
 

@@ -50,7 +50,7 @@ export function FinancialsCard({ propertyId, navigate }: { propertyId: number; n
     { label: "Operating expenses", value: totals.operating },
     { label: "Net operating", value: totals.net, tone: totals.net < 0 ? "text-rose-600" : undefined },
     { label: "Capital spending", value: totals.capital },
-    { label: "Unpaid bills", value: totals.unpaid, tone: totals.unpaid > 0 ? "text-amber-700" : undefined },
+    { label: "Unpaid bills, all dates", value: totals.unpaid, tone: totals.unpaid > 0 ? "text-amber-700" : undefined },
   ] : [];
 
   return (
