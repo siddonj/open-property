@@ -24,7 +24,10 @@ Open Property already supports:
 - Basic application records and API endpoints
 
 Applications currently lack a user-facing workflow. The rent ledger is not a
-general-ledger accounting system.
+general-ledger accounting system: amounts are `REAL`, payments can be deleted,
+and deleting a property cascades through its financial history. Phase 6 replaces
+it with a double-entry ledger; Phase 3 builds new financial tables so they need
+no rework when that happens.
 
 ## Product principles
 
@@ -91,16 +94,22 @@ Acceptance criteria:
 
 ### Phase 3: Financial operations
 
-Extend rent tracking with basic property expenses and vendor bills. This phase
-does not aim to provide a full accounting or banking platform.
+Extend rent tracking with property expenses and vendor bills, built as the
+payables subledger the Phase 6 general ledger will post from. This phase posts
+no journal entries.
 
 Scope:
 
-- Record expenses with property, optional unit and vendor, category, amount,
-  date, due date, payment status, and notes.
-- Track vendor bills and their payment status.
-- Add property-level income and expense summaries.
-- Add simple budgets and comparisons against recorded results.
+- Record bills with property, optional vendor, bill date, due date, reference,
+  and notes, and one or more lines, each coded to a chart-of-accounts account
+  with an optional unit and work order.
+- Record bill payments (date, amount, method) as their own records; correct
+  them by voiding, not deleting.
+- Seed a HUD-numbered chart of accounts for expense, capital, and income
+  accounts, flagged as operating or below NOI.
+- Add property-level income and expense summaries that separate operating
+  expenses from capital spending.
+- Add simple budgets by account and comparisons against recorded results.
 - Allow relevant financial reports to be exported as CSV.
 
 Acceptance criteria:
@@ -110,6 +119,8 @@ Acceptance criteria:
 - Report totals are calculated from persisted records and have clear date and
   property filters.
 - Exports match the filters and totals shown in the interface.
+- New financial amounts are stored as integer cents, and deleting a property
+  or vendor never deletes its bills or payments.
 
 ### Phase 4: Alerts and reporting
 
@@ -147,6 +158,54 @@ Acceptance criteria:
 - Important changes can be traced to a user and timestamp.
 - Documents are accessible only to authorized users and related records.
 
+### Phase 6: General ledger and accounting
+
+Replace the rent ledger and Phase 3 payables with a double-entry general ledger
+that meets US multifamily accounting and compliance expectations. Research and
+v1 scope: [`reports/Multifamily accounting and compliance.md`](reports/Multifamily%20accounting%20and%20compliance.md).
+
+Depends on Phase 5, so every entry records a user and approvals can be
+separated. Before design, prove that a multi-line posting can be written
+atomically on D1 (a `batch()` pass-through in `@clawnify/db`, or a
+sealed-entry pattern tested locally).
+
+Scope:
+
+- An append-only journal in integer cents: balanced entries, corrections by
+  reversal only, property-local accounting dates, and monthly period locks.
+- Property, unit, lease, tenant, vendor, and work order as line dimensions,
+  not encoded in account numbers.
+- Migrate rent charges and payments to integer cents, and replace single-charge
+  payments with receipts and applications (split payments, prepaid rent, NSF
+  reversals). Existing history becomes opening balances.
+- Payment-application order and late-fee limits driven by the property's
+  state.
+- Write-offs that reduce revenue (ASC 842).
+- A security-deposit liability subledger with effective-dated state rules,
+  return-deadline tracking, and itemized deductions before release.
+- Post Phase 3 bills and bill payments to accounts payable; capture vendor W-9
+  status and 1099 totals using each year's threshold.
+- Reports: trial balance, P&L to NOI, balance sheet, rent roll, aged
+  receivables, and deposit activity, with cash basis derived from payment
+  applications.
+- An invariant check that every entry balances and that AR, AP, and deposit
+  control accounts equal their subledgers per property.
+
+Acceptance criteria:
+
+- No posted amount can be edited or deleted; every correction is a visible
+  reversing entry.
+- The trial balance sums to zero, and each control account matches its
+  subledger.
+- Posting into a locked period is rejected.
+- Deposit and late-fee behavior follows the rules configured for the
+  property's state.
+
+Later candidates, not in this phase: trust accounting with three-way
+reconciliation, deposit interest and 1099-INT, gross potential rent journal
+posting, housing-voucher tenant and subsidy split, a fixed-asset register,
+owner statements, and lender (Fannie Mae, Freddie Mac) exports.
+
 ## Out of scope for this roadmap
 
 Unless separately approved, do not include:
@@ -156,7 +215,10 @@ Unless separately approved, do not include:
 - SMS or email blasts and automated texting
 - Online card or ACH payment processing
 - Public resident or owner portals
-- Automated bank reconciliation or a full general ledger
+- Bank feeds, automated bank reconciliation, depreciation, and tax-return
+  preparation or filing
+- Affordable-housing program systems: TRACS, HUD-50059 and LIHTC tenant
+  certifications, EIV, REAC/FASS-MF filing, and HOTMA income calculations
 - AI agents that make financial, leasing, screening, or maintenance decisions
   without operator review
 
