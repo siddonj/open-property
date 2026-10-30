@@ -155,6 +155,8 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
 
   async function recordExpense() {
     if (!workOrder || workOrder.property_id == null || workOrder.cost == null) return;
+    // Shift the decimal in the string: 12.345 * 100 is 1234.4999… in floating point.
+    const shifted = Math.round(Number(`${workOrder.cost}e2`));
     try {
       if (!accounts.length) setAccounts(await app.listAccounts());
       setBillPrefill({
@@ -164,7 +166,7 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
         line: {
           description: workOrder.title,
           unit_id: workOrder.unit_id,
-          amount_cents: Math.round(workOrder.cost * 100),
+          amount_cents: Number.isFinite(shifted) ? shifted : Math.round(workOrder.cost * 100),
           work_order_id: workOrder.id,
           work_order_title: workOrder.title,
         },

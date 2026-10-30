@@ -2,7 +2,7 @@
 
 Intent: [`intent.md`](./intent.md)
 Spec: [`spec.md`](./spec.md)
-Status: Approved 2026-10-29 (revised); Slices 0–D built; wrap-up next
+Status: Approved 2026-10-29 (revised); Slices 0–D built; wrap-up done 2026-10-30
 
 Delivered as five slices, in order. Each slice ends with typecheck, build,
 curl, and browser checks before the next starts.
@@ -106,7 +106,7 @@ curl, and browser checks before the next starts.
 
 ## Proof
 
-- [ ] Migration applies to a fresh DB, and a second run is a no-op
+- [x] Migration applies to a fresh DB, and a second run is a no-op
 - [ ] curl checks: bill CRUD with lines; edit and delete return 409 once a
       payment exists; payment for the balance, overpayment 400, void returns
       the bill to unpaid; unit/property mismatch and non-expense account 400;
@@ -117,8 +117,8 @@ curl, and browser checks before the next starts.
 - [ ] Browser: each slice's flow, plus regression checks on rent, maintenance,
       property, dashboard, and the existing report tabs
 - [ ] Each CSV export's rows and totals match the screen and the API
-- [ ] `pnpm typecheck`
-- [ ] `pnpm build`
+- [x] `pnpm typecheck`
+- [x] `pnpm build`
 
 ## Deviations
 
@@ -203,3 +203,25 @@ curl, and browser checks before the next starts.
   - The maintenance and property pages now pass `onSaved` to the work-order
     dialog. They previously reloaded only when it closed, which happens before
     the bill saves, so the list kept offering a duplicate.
+
+- **2026-10-30 — Wrap-up.** README (Expenses, Reports, Financials card,
+  Record as expense, upgrade migration order) and CLAUDE.md (section list,
+  money rules) updated. An independent review against `REVIEW.md` found no
+  critical, high, or medium issues. Its low findings:
+  - **Fixed:** the work-order → bill prefill converted the `REAL` cost with
+    `cost * 100`, so a cost like 1.005 became 100 cents. It now shifts the
+    decimal in the string (101 cents).
+  - **Fixed (label):** the Financials card's unpaid figure covers bills of any
+    date, while the other figures are year to date. That's intended (it's what
+    is owed now), so the label now reads "Unpaid bills, all dates".
+  - **Documented:** work-order reads now join `bill_lines`, so an upgraded
+    deployment must apply `0003` before the new Worker goes live. README's
+    deploy section says so.
+  - **Deferred by Josh:** `index.ts` is about 1,900 lines, past the 1,800 mark
+    in Risks. Extracting the financial sections to `src/server/finance.ts` was
+    proposed on 2026-10-30 and deferred to a separate change.
+  - **Proof status:** typecheck, build, and the migration are ticked above. The
+    curl and browser checks are recorded per slice in these Deviations, but
+    regression checks on rent, maintenance, dashboard, and the older report
+    tabs, and the CSV-vs-screen check for the bills, income, and P&L exports,
+    are not recorded, so those boxes stay open.
