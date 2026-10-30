@@ -31,6 +31,17 @@ async function parseJson<T>(c: Context, schema: z.ZodType<T>): Promise<{ ok: tru
   return { ok: true, data: parsed.data };
 }
 
+// Deleting a property, unit or lease cascades to its rent charges and payments, so those
+// deletes are refused once any rent history exists. `scope` filters rent_charges via leases l / units u.
+async function hasRentHistory(scope: string, id: number): Promise<boolean> {
+  const row = await get(
+    `SELECT 1 FROM rent_charges rc JOIN leases l ON l.id = rc.lease_id JOIN units u ON u.id = l.unit_id
+     WHERE ${scope} = ? LIMIT 1`,
+    [id],
+  );
+  return !!row;
+}
+
 function buildUpdate(fields: Record<string, unknown>): { sets: string[]; params: unknown[] } {
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -102,6 +113,9 @@ app.put("/api/properties/:id", async (c) => {
 app.delete("/api/properties/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  if (await hasRentHistory("u.property_id", id)) {
+    return c.json({ error: "This property has rent history, so it can't be deleted. End or cancel its leases instead." }, 409);
+  }
   const r = await run("DELETE FROM properties WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
   return c.json({ ok: true });
@@ -182,6 +196,9 @@ app.put("/api/units/:id", async (c) => {
 app.delete("/api/units/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  if (await hasRentHistory("u.id", id)) {
+    return c.json({ error: "This unit has rent history, so it can't be deleted. End or cancel its leases instead." }, 409);
+  }
   const r = await run("DELETE FROM units WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
   return c.json({ ok: true });
@@ -388,6 +405,9 @@ app.delete("/api/leases/:id", async (c) => {
   if (!id) return c.json({ error: "Invalid ID" }, 400);
   const lease = await get<{ unit_id: number }>("SELECT unit_id FROM leases WHERE id = ?", [id]);
   if (!lease) return c.json({ error: "Not found" }, 404);
+  if (await hasRentHistory("l.id", id)) {
+    return c.json({ error: "This lease has rent history, so it can't be deleted. End or cancel it instead." }, 409);
+  }
   await run("DELETE FROM leases WHERE id = ?", [id]);
   await syncUnitOccupancy(lease.unit_id);
   return c.json({ ok: true });

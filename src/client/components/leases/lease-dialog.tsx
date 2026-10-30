@@ -119,7 +119,7 @@ export function LeaseDialog({ open, onOpenChange, lease, defaults, onSaved }: Pr
 
   async function remove() {
     if (!lease) return;
-    if (!confirm("Delete this lease? Rent charges and payments tied to it will also be removed.")) return;
+    if (!confirm("Delete this lease? Leases with rent history can't be deleted; end or cancel them instead.")) return;
     try {
       await app.deleteLease(lease.id);
       onSaved?.();
