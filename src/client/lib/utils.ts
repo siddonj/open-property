@@ -33,9 +33,10 @@ export function formatDate(iso: string | null | undefined, opts?: Intl.DateTimeF
 }
 
 /** Format a number as currency. Uses USD by default. */
-export function formatMoney(n: number | null | undefined, currency = "USD"): string {
+export function formatMoney(n: number | null | undefined, currency = "USD", cents = false): string {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
-  return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
+  const digits = cents ? 2 : 0;
+  return new Intl.NumberFormat(undefined, { style: "currency", currency, minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n);
 }
 
 /** YYYY-MM-DD for a given Date in local time. */
@@ -71,6 +72,21 @@ export function daysBetween(a: string, b: string): number {
   const db = new Date(`${b}T00:00:00`).getTime();
   return Math.round((db - da) / 86_400_000);
 }
+
+/** Format integer cents as currency with two decimals. */
+export function formatCents(cents: number | null | undefined, currency = "USD"): string {
+  return formatMoney(cents == null ? cents : cents / 100, currency, true);
+}
+
+/** Parse typed money ("1,234.5", "$12") to integer cents without float math; null if invalid. */
+export function parseCents(input: string): number | null {
+  const m = /^(\d{1,9})(?:\.(\d{0,2}))?$/.exec(input.replace(/[\s$,]/g, ""));
+  if (!m) return null;
+  return Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
+}
+
+/** Plain decimal string for integer cents, for editable inputs ("1234.50"). */
+export const centsToInput = (cents: number) => `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
 
 export function downloadCsv<T>(
   filename: string,

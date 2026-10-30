@@ -12,6 +12,7 @@ import { ApplicationsPage } from "./components/applications/applications-page";
 import { LeasesPage } from "./components/leases/leases-page";
 import { RentPage } from "./components/rent/rent-page";
 import { MaintenancePage } from "./components/maintenance/maintenance-page";
+import { ExpensesPage } from "./components/expenses/expenses-page";
 import { ReportsPage } from "./components/reports/reports-page";
 import { SettingsPage } from "./components/settings/settings-page";
 
@@ -39,6 +40,7 @@ export function App() {
               {route.name === "leases" && <LeasesPage navigate={navigate} />}
               {route.name === "rent" && <RentPage />}
               {route.name === "maintenance" && <MaintenancePage />}
+              {route.name === "expenses" && <ExpensesPage />}
               {route.name === "reports" && <ReportsPage />}
               {route.name === "settings" && <SettingsPage />}
               {route.name === "not-found" && (

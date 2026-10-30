@@ -116,6 +116,9 @@ app.delete("/api/properties/:id", async (c) => {
   if (await hasRentHistory("u.property_id", id)) {
     return c.json({ error: "This property has rent history, so it can't be deleted. End or cancel its leases instead." }, 409);
   }
+  if (await get("SELECT 1 FROM bills WHERE property_id = ? UNION ALL SELECT 1 FROM budgets WHERE property_id = ? LIMIT 1", [id, id])) {
+    return c.json({ error: "This property has bills or budgets. Its financial records are kept, so it can't be deleted" }, 409);
+  }
   const r = await run("DELETE FROM properties WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
   return c.json({ ok: true });
@@ -766,6 +769,9 @@ app.put("/api/vendors/:id", async (c) => {
 app.delete("/api/vendors/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  if (await get("SELECT 1 FROM bills WHERE vendor_id = ?", [id])) {
+    return c.json({ error: "This vendor has bills. Its financial records are kept, so it can't be deleted" }, 409);
+  }
   const r = await run("DELETE FROM vendors WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
   return c.json({ ok: true });
@@ -1106,6 +1112,236 @@ app.post("/api/recurring-tasks/generate", async (c) => {
     );
   }
   return c.json({ created, through: horizon });
+});
+
+// ── Accounts ───────────────────────────────────────────────────────
+
+app.get("/api/accounts", async (c) => {
+  const rows = await query("SELECT * FROM gl_accounts WHERE active = 1 ORDER BY code");
+  return c.json({ accounts: rows });
+});
+
+// ── Bills & payments ───────────────────────────────────────────────
+// Integer cents. A bill with live (non-voided) payments is locked (D6); payments are
+// voided, never deleted. @clawnify/db has no transactions, so a bill is written with
+// complete = 0 and sealed once all its lines exist (D8). Reports count complete bills only.
+
+const amountCents = z.number().int().positive().max(100_000_000_000);
+
+const BillLineInput = z.object({
+  account_id: z.number().int(),
+  description: z.string().trim().min(1).max(200),
+  amount_cents: amountCents,
+  unit_id: z.number().int().nullable().optional(),
+  work_order_id: z.number().int().nullable().optional(),
+});
+
+const BillInput = z.object({
+  property_id: z.number().int(),
+  vendor_id: z.number().int().nullable().optional(),
+  bill_date: z.string().regex(STRICT_DATE_RE),
+  due_date: z.string().regex(STRICT_DATE_RE).nullable().optional(),
+  reference: z.string().max(100).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  lines: z.array(BillLineInput).min(1).max(50),
+});
+
+const BillPaymentInput = z.object({
+  paid_on: z.string().regex(STRICT_DATE_RE),
+  amount_cents: amountCents.optional(),
+  method: z.enum(["check", "ach", "card", "cash", "other"]),
+  reference: z.string().max(100).nullable().optional(),
+});
+
+type BillRow = { id: number; complete: number; total_cents: number; paid_cents: number; [k: string]: unknown };
+type ChildRow = { bill_id: number; [k: string]: unknown };
+
+const BILL_SELECT = `
+  SELECT b.*, p.name AS property_name, p.color AS property_color, v.name AS vendor_name,
+    (SELECT COALESCE(SUM(amount_cents), 0) FROM bill_lines WHERE bill_id = b.id) AS total_cents,
+    (SELECT COALESCE(SUM(amount_cents), 0) FROM bill_payments WHERE bill_id = b.id AND voided_at IS NULL) AS paid_cents
+  FROM bills b
+  LEFT JOIN properties p ON p.id = b.property_id
+  LEFT JOIN vendors v ON v.id = b.vendor_id`;
+
+/** Bills matching `where` (on alias b) with their lines and payments attached. */
+async function loadBills(where: string[], params: unknown[]) {
+  const w = where.length ? ` WHERE ${where.join(" AND ")}` : "";
+  const bills = await query<BillRow>(`${BILL_SELECT}${w} ORDER BY b.bill_date DESC, b.id DESC`, params);
+  if (!bills.length) return [];
+  // Same filter on the children, so the bound-parameter count stays small.
+  const lines = await query<ChildRow>(
+    `SELECT l.*, a.code AS account_code, a.name AS account_name, a.type AS account_type, a.is_operating,
+       u.name AS unit_name, wo.title AS work_order_title
+     FROM bill_lines l JOIN bills b ON b.id = l.bill_id JOIN gl_accounts a ON a.id = l.account_id
+     LEFT JOIN units u ON u.id = l.unit_id LEFT JOIN work_orders wo ON wo.id = l.work_order_id${w}
+     ORDER BY l.id`,
+    params,
+  );
+  const payments = await query<ChildRow>(
+    `SELECT bp.* FROM bill_payments bp JOIN bills b ON b.id = bp.bill_id${w} ORDER BY bp.paid_on, bp.id`,
+    params,
+  );
+  return bills.map((b) => ({
+    ...b,
+    complete: !!b.complete,
+    status: b.total_cents > 0 && b.paid_cents >= b.total_cents ? "paid" : "unpaid",
+    lines: lines.filter((l) => l.bill_id === b.id),
+    payments: payments.filter((p) => p.bill_id === b.id),
+  }));
+}
+
+const loadBill = async (id: number) => (await loadBills(["b.id = ?"], [id]))[0];
+
+/** Returns an error message if the bill's references don't line up, else null. */
+async function checkBill(d: z.infer<typeof BillInput>, billId: number | null): Promise<{ error: string; status: 400 | 409 } | null> {
+  if (!await get("SELECT 1 FROM properties WHERE id = ?", [d.property_id])) return { error: "Property not found", status: 400 };
+  if (d.vendor_id != null && !await get("SELECT 1 FROM vendors WHERE id = ?", [d.vendor_id])) return { error: "Vendor not found", status: 400 };
+  if (d.due_date && d.due_date < d.bill_date) return { error: "Due date can't be before the bill date", status: 400 };
+  const accounts = new Set((await query<{ id: number }>(
+    "SELECT id FROM gl_accounts WHERE active = 1 AND type IN ('expense', 'asset')",
+  )).map((a) => a.id));
+  const units = new Set((await query<{ id: number }>("SELECT id FROM units WHERE property_id = ?", [d.property_id])).map((u) => u.id));
+  const seenWorkOrders = new Set<number>();
+  for (const l of d.lines) {
+    if (!accounts.has(l.account_id)) return { error: "Each line needs an expense or capital account", status: 400 };
+    if (l.unit_id != null && !units.has(l.unit_id)) return { error: UNIT_MISMATCH, status: 400 };
+    if (l.work_order_id == null) continue;
+    if (seenWorkOrders.has(l.work_order_id)) return { error: "A work order can appear on only one line", status: 400 };
+    seenWorkOrders.add(l.work_order_id);
+    const wo = await get<{ property_id: number | null }>("SELECT property_id FROM work_orders WHERE id = ?", [l.work_order_id]);
+    if (!wo || wo.property_id !== d.property_id) return { error: "The work order doesn't belong to the selected property", status: 400 };
+    const taken = await get<{ bill_id: number }>("SELECT bill_id FROM bill_lines WHERE work_order_id = ?", [l.work_order_id]);
+    if (taken && taken.bill_id !== billId) return { error: "This work order is already on another bill", status: 409 };
+  }
+  return null;
+}
+
+async function insertLines(billId: number, lines: z.infer<typeof BillLineInput>[]) {
+  for (const l of lines) {
+    await run(
+      "INSERT INTO bill_lines (bill_id, account_id, unit_id, work_order_id, description, amount_cents) VALUES (?, ?, ?, ?, ?, ?)",
+      [billId, l.account_id, l.unit_id ?? null, l.work_order_id ?? null, l.description, l.amount_cents],
+    );
+  }
+  await run("UPDATE bills SET complete = 1 WHERE id = ?", [billId]);
+}
+
+const UNIT_MISMATCH = "The unit doesn't belong to the selected property";
+const BILL_LOCKED = "This bill has payments. Void them to edit it";
+
+app.get("/api/bills", async (c) => {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  for (const key of ["property_id", "vendor_id"] as const) {
+    const raw = c.req.query(key);
+    if (raw === undefined) continue;
+    const n = intParam(raw);
+    if (!n) return c.json({ error: `Invalid ${key}` }, 400);
+    where.push(`b.${key} = ?`); params.push(n);
+  }
+  const accountRaw = c.req.query("account_id");
+  if (accountRaw !== undefined) {
+    const n = intParam(accountRaw);
+    if (!n) return c.json({ error: "Invalid account_id" }, 400);
+    where.push("EXISTS (SELECT 1 FROM bill_lines WHERE bill_id = b.id AND account_id = ?)"); params.push(n);
+  }
+  const status = c.req.query("status");
+  if (status && status !== "unpaid" && status !== "paid") return c.json({ error: "Invalid status" }, 400);
+  const from = c.req.query("from");
+  const to = c.req.query("to");
+  if ((from && !STRICT_DATE_RE.test(from)) || (to && !STRICT_DATE_RE.test(to))) {
+    return c.json({ error: "from/to must be 'YYYY-MM-DD'" }, 400);
+  }
+  if (from && to && (from > to || monthIndex(to.slice(0, 7)) - monthIndex(from.slice(0, 7)) >= MAX_REPORT_MONTHS)) {
+    return c.json({ error: `from must be on or before to, spanning at most ${MAX_REPORT_MONTHS} months` }, 400);
+  }
+  if (from) { where.push("b.bill_date >= ?"); params.push(from); }
+  if (to) { where.push("b.bill_date <= ?"); params.push(to); }
+  let bills = await loadBills(where, params);
+  if (status) bills = bills.filter((b) => b.complete && b.status === status);
+  return c.json({ bills });
+});
+
+app.post("/api/bills", async (c) => {
+  const parsed = await parseJson(c, BillInput);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const d = parsed.data;
+  const bad = await checkBill(d, null);
+  if (bad) return c.json({ error: bad.error }, bad.status);
+  const result = await run(
+    "INSERT INTO bills (property_id, vendor_id, bill_date, due_date, reference, notes, complete) VALUES (?, ?, ?, ?, ?, ?, 0)",
+    [d.property_id, d.vendor_id ?? null, d.bill_date, d.due_date ?? null, d.reference ?? null, d.notes ?? null],
+  );
+  const id = Number(result.lastInsertRowid);
+  await insertLines(id, d.lines);
+  return c.json({ bill: await loadBill(id) }, 201);
+});
+
+// Full replace of header and lines.
+app.put("/api/bills/:id", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const parsed = await parseJson(c, BillInput);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  if (!await get("SELECT 1 FROM bills WHERE id = ?", [id])) return c.json({ error: "Not found" }, 404);
+  if (await get("SELECT 1 FROM bill_payments WHERE bill_id = ? AND voided_at IS NULL", [id])) {
+    return c.json({ error: BILL_LOCKED }, 409);
+  }
+  const d = parsed.data;
+  const bad = await checkBill(d, id);
+  if (bad) return c.json({ error: bad.error }, bad.status);
+  // ponytail: payment check and rewrite aren't atomic; a payment landing mid-edit is possible but single-user.
+  await run(
+    "UPDATE bills SET property_id = ?, vendor_id = ?, bill_date = ?, due_date = ?, reference = ?, notes = ?, complete = 0 WHERE id = ?",
+    [d.property_id, d.vendor_id ?? null, d.bill_date, d.due_date ?? null, d.reference ?? null, d.notes ?? null, id],
+  );
+  await run("DELETE FROM bill_lines WHERE bill_id = ?", [id]);
+  await insertLines(id, d.lines);
+  return c.json({ bill: await loadBill(id) });
+});
+
+app.delete("/api/bills/:id", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  // Voided payments count too: payment history is never deleted.
+  if (await get("SELECT 1 FROM bill_payments WHERE bill_id = ?", [id])) {
+    return c.json({ error: "This bill has payment records, so it can't be deleted" }, 409);
+  }
+  const r = await run("DELETE FROM bills WHERE id = ?", [id]);
+  if (!r.changes) return c.json({ error: "Not found" }, 404);
+  return c.json({ ok: true });
+});
+
+app.post("/api/bills/:id/payments", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const parsed = await parseJson(c, BillPaymentInput);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const bill = await loadBill(id);
+  if (!bill) return c.json({ error: "Not found" }, 404);
+  if (!bill.complete) return c.json({ error: "Save the bill again before paying it" }, 409);
+  const balance = bill.total_cents - bill.paid_cents;
+  if (balance <= 0) return c.json({ error: "This bill is already paid" }, 409);
+  const d = parsed.data;
+  const amount = d.amount_cents ?? balance;
+  if (amount > balance) return c.json({ error: "Payment is more than the unpaid balance" }, 400);
+  // ponytail: balance check then insert isn't atomic; two simultaneous payments could overpay. Single-user app.
+  await run(
+    "INSERT INTO bill_payments (bill_id, paid_on, amount_cents, method, reference) VALUES (?, ?, ?, ?, ?)",
+    [id, d.paid_on, amount, d.method, d.reference ?? null],
+  );
+  return c.json({ bill: await loadBill(id) }, 201);
+});
+
+app.post("/api/bill-payments/:id/void", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const payment = await get<{ bill_id: number; voided_at: string | null }>("SELECT bill_id, voided_at FROM bill_payments WHERE id = ?", [id]);
+  if (!payment) return c.json({ error: "Not found" }, 404);
+  if (payment.voided_at) return c.json({ error: "Payment is already voided" }, 409);
+  await run("UPDATE bill_payments SET voided_at = datetime('now') WHERE id = ?", [id]);
+  return c.json({ bill: await loadBill(payment.bill_id) });
 });
 
 // ── Applications ───────────────────────────────────────────────────
