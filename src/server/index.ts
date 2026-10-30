@@ -1324,6 +1324,7 @@ const SettingsInput = z.object({
   late_fee_grace_days: z.coerce.number().int().min(0).max(365),
   currency: z.string().regex(/^[A-Z]{3}$/),
   renewal_notice_days: z.coerce.number().int().min(1).max(365),
+  maintenance_approval_threshold: z.coerce.number().min(0),
 }).partial().strict();
 
 app.put("/api/settings", async (c) => {
