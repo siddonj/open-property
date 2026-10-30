@@ -2,13 +2,15 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Building2, MapPin, Pencil, Plus, Wrench } from "lucide-react";
 import { useApp } from "@/context";
 import { api } from "@/api";
-import { cn, colorClasses, formatDate, formatMoney } from "@/lib/utils";
+import { cn, colorClasses, daysBetween, formatDate, formatMoney, toIsoDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PropertyDialog } from "./property-dialog";
 import { UnitDialog } from "./unit-dialog";
 import { WorkOrderDialog } from "../maintenance/work-order-dialog";
+import { ApprovalBadge } from "../maintenance/approval-badge";
+import { dueState, isOpen } from "../maintenance/due";
 import type { Property, Unit, WorkOrder } from "@/types";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -36,6 +38,9 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
   const [editingUnit, setEditingUnit] = useState<Unit | undefined>(undefined);
   const [unitDialogOpen, setUnitDialogOpen] = useState(false);
   const [woDialogOpen, setWoDialogOpen] = useState(false);
+  const [editingWo, setEditingWo] = useState<WorkOrder | undefined>(undefined);
+  const [woView, setWoView] = useState<"open" | "completed" | "all">("open");
+  const [woUnit, setWoUnit] = useState<number | "all">("all");
 
   async function load() {
     try {
@@ -80,6 +85,11 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
   const occupied = units.filter((u) => u.status === "occupied").length;
   const totalRent = units.reduce((sum, u) => sum + (u.market_rent ?? 0), 0);
   const openWorkOrders = workOrders.filter((w) => w.status !== "completed" && w.status !== "cancelled");
+  const today = toIsoDate(new Date());
+  const visibleWorkOrders = workOrders.filter((w) =>
+    (woView === "all" || (woView === "open" ? isOpen(w) : w.status === "completed")) &&
+    (woUnit === "all" || w.unit_id === woUnit),
+  );
 
   return (
     <div className="flex-1 overflow-auto">
@@ -168,28 +178,72 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
         </section>
 
         <section>
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Work orders</h2>
-            <Button size="sm" variant="outline" onClick={() => setWoDialogOpen(true)}>
-              <Plus className="mr-1 h-4 w-4" /> New work order
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div role="group" aria-label="Work order status" className="inline-flex rounded-md border p-0.5 text-xs">
+                {(["open", "completed", "all"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    aria-pressed={woView === v}
+                    onClick={() => setWoView(v)}
+                    className={cn("rounded px-2 py-1 capitalize", woView === v ? "bg-muted font-medium" : "text-muted-foreground hover:text-foreground")}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+              {units.length > 1 && (
+                <select
+                  aria-label="Filter work orders by unit"
+                  className="h-8 rounded-md border bg-background px-2 text-xs"
+                  value={String(woUnit)}
+                  onChange={(e) => setWoUnit(e.target.value === "all" ? "all" : Number(e.target.value))}
+                >
+                  <option value="all">All units</option>
+                  {units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
+              )}
+              <Button size="sm" variant="outline" onClick={() => { setEditingWo(undefined); setWoDialogOpen(true); }}>
+                <Plus className="mr-1 h-4 w-4" /> New work order
+              </Button>
+            </div>
           </div>
-          {workOrders.length === 0 ? (
-            <Card className="p-8 text-center text-sm text-muted-foreground">No work orders for this property.</Card>
+          {visibleWorkOrders.length === 0 ? (
+            <Card className="p-8 text-center text-sm text-muted-foreground">
+              {workOrders.length === 0 ? "No work orders for this property." : "No work orders match this filter."}
+            </Card>
           ) : (
             <Card className="divide-y">
-              {workOrders.map((w) => (
-                <div key={w.id} className="flex items-center justify-between gap-4 p-4">
+              {visibleWorkOrders.map((w) => (
+                <div
+                  key={w.id}
+                  className="flex cursor-pointer items-center justify-between gap-4 p-4 hover:bg-muted/40"
+                  onClick={() => { setEditingWo(w); setWoDialogOpen(true); }}
+                >
                   <div className="flex min-w-0 items-start gap-3">
                     <Wrench className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{w.title}</p>
                       <p className="truncate text-xs text-muted-foreground">
-                        {[w.unit_name, w.vendor_name, formatDate(w.created_at)].filter(Boolean).join(" · ")}
+                        {[
+                          w.unit_name,
+                          w.vendor_name ?? (isOpen(w) ? "Unassigned" : null),
+                          w.status === "completed" && w.completed_at
+                            ? `Completed ${formatDate(w.completed_at)}`
+                            : w.scheduled_at ? `Scheduled ${formatDate(w.scheduled_at)}` : `Created ${formatDate(w.created_at)}`,
+                        ].filter(Boolean).join(" · ")}
                       </p>
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
+                    {dueState(w, today) === "overdue" && w.scheduled_at && (
+                      <span className="text-xs font-medium text-rose-600">
+                        Overdue · {-daysBetween(today, w.scheduled_at.slice(0, 10))}d
+                      </span>
+                    )}
+                    {w.approval_status && <ApprovalBadge status={w.approval_status} />}
                     <Badge variant="outline" className="capitalize">{w.priority}</Badge>
                     <Badge variant="secondary" className="capitalize">{w.status.replace("_", " ")}</Badge>
                   </div>
@@ -214,6 +268,7 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
       <WorkOrderDialog
         open={woDialogOpen}
         onOpenChange={(o) => { setWoDialogOpen(o); if (!o) load(); }}
+        workOrder={editingWo}
         defaults={{ property_id: property.id }}
       />
     </div>

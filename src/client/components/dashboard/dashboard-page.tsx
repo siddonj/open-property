@@ -139,7 +139,12 @@ export function DashboardPage({ navigate }: { navigate: (to: string) => void }) 
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <Card className="p-5">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Open work orders</h2>
+              <h2 className="text-sm font-semibold">
+                Open work orders
+                {summary.overdue_work_orders > 0 && (
+                  <span className="ml-2 text-xs font-medium text-rose-600">{summary.overdue_work_orders} overdue</span>
+                )}
+              </h2>
               <button
                 type="button"
                 onClick={() => navigate("/maintenance")}
@@ -158,6 +163,9 @@ export function DashboardPage({ navigate }: { navigate: (to: string) => void }) 
                       <p className="truncate text-sm font-medium">{w.title}</p>
                       <p className="truncate text-xs text-muted-foreground">
                         {[w.property_name, w.unit_name].filter(Boolean).join(" · ") || "Unassigned"}
+                        {w.scheduled_at && w.scheduled_at.slice(0, 10) < toIsoDate(new Date()) && (
+                          <span className="ml-1 font-medium text-rose-600">· Overdue since {formatDate(w.scheduled_at)}</span>
+                        )}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">

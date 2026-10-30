@@ -161,6 +161,29 @@ export interface Vendor {
 export type WorkOrderPriority = "low" | "normal" | "high" | "urgent";
 export type WorkOrderStatus = "open" | "assigned" | "in_progress" | "completed" | "cancelled";
 
+export type ApprovalStatus = "pending" | "approved" | "rejected";
+
+export interface RecurringTask {
+  id: number;
+  property_id: number;
+  unit_id: number | null;
+  vendor_id: number | null;
+  title: string;
+  description: string | null;
+  priority: WorkOrderPriority;
+  estimated_cost: number | null;
+  interval_unit: "week" | "month";
+  interval_count: number;
+  start_date: string;
+  last_generated_through: string | null;
+  active: boolean;
+  created_at: string;
+  next_occurrence: string | null;
+  property_name?: string | null;
+  unit_name?: string | null;
+  vendor_name?: string | null;
+}
+
 export interface WorkOrder {
   id: number;
   property_id: number | null;
@@ -174,6 +197,11 @@ export interface WorkOrder {
   scheduled_at: string | null;
   completed_at: string | null;
   cost: number | null;
+  estimated_cost: number | null;
+  approval_status: ApprovalStatus | null;
+  approved_at: string | null;
+  recurring_task_id: number | null;
+  occurrence_date: string | null;
   notes: string | null;
   created_at: string;
   // Joined
@@ -223,8 +251,9 @@ export interface DashboardSummary {
   overdue_count: number;
   open_work_orders: number;
   urgent_work_orders: number;
+  overdue_work_orders: number;
   recent_work_orders: {
-    id: number; title: string; priority: string; status: string;
+    id: number; title: string; priority: string; status: string; scheduled_at: string | null;
     property_name: string | null; unit_name: string | null; created_at: string;
   }[];
   upcoming_expirations: {
@@ -305,6 +334,7 @@ export type NewProperty = Partial<Omit<Property, "id" | "created_at" | "unit_cou
 export type NewUnit = Partial<Omit<Unit, "id" | "created_at" | "property_name" | "property_color" | "property_address" | "property_city" | "active_lease_id" | "active_tenant_name">> & { property_id: number; name: string };
 export type NewTenant = Partial<Omit<Tenant, "id" | "created_at" | "active_unit_id" | "active_unit_name" | "active_property_name">> & { first_name: string; last_name: string };
 export type NewLease = Partial<Omit<Lease, "id" | "created_at" | "unit_name" | "property_id" | "property_name" | "property_color" | "tenant_first_name" | "tenant_last_name" | "tenant_email" | "tenant_phone" | "move_in_done" | "move_in_total" | "move_out_done" | "move_out_total">> & { unit_id: number; start_date: string; end_date: string };
-export type NewWorkOrder = Partial<Omit<WorkOrder, "id" | "created_at" | "property_name" | "property_color" | "unit_name" | "tenant_first_name" | "tenant_last_name" | "vendor_name" | "vendor_color">> & { title: string };
+export type NewWorkOrder = Partial<Omit<WorkOrder, "id" | "created_at" | "property_name" | "property_color" | "unit_name" | "tenant_first_name" | "tenant_last_name" | "vendor_name" | "vendor_color" | "approval_status" | "approved_at" | "recurring_task_id" | "occurrence_date">> & { title: string };
+export type NewRecurringTask = Omit<RecurringTask, "id" | "created_at" | "last_generated_through" | "next_occurrence" | "property_name" | "unit_name" | "vendor_name">;
 export type NewVendor = Partial<Omit<Vendor, "id" | "created_at">> & { name: string };
 export type NewApplication = Partial<Omit<Application, "id" | "created_at" | "updated_at" | "unit_name" | "property_id" | "property_name">> & { first_name: string; last_name: string };

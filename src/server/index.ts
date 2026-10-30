@@ -712,8 +712,22 @@ const WorkOrderInput = z.object({
   scheduled_at: z.string().optional().nullable(),
   completed_at: z.string().optional().nullable(),
   cost: z.number().min(0).optional().nullable(),
+  estimated_cost: z.number().min(0).optional().nullable(),
   notes: z.string().optional().nullable(),
 });
+
+// Statuses that require approval first when a work order is above the threshold.
+const APPROVAL_GATED = ["in_progress", "completed"];
+
+/** settings.maintenance_approval_threshold; null when unset or <= 0 (approval disabled). */
+async function approvalThreshold(): Promise<number | null> {
+  const row = await get<{ value: string }>("SELECT value FROM settings WHERE key = 'maintenance_approval_threshold'");
+  const n = parseFloat(row?.value ?? "");
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+const approvalFor = (estimate: number | null | undefined, threshold: number | null) =>
+  threshold != null && estimate != null && estimate > threshold ? "pending" : null;
 
 const WO_SELECT = `
   SELECT w.*,
@@ -746,15 +760,21 @@ app.post("/api/work-orders", async (c) => {
   const parsed = await parseJson(c, WorkOrderInput);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const d = parsed.data;
+  const status = d.status ?? "open";
+  const approval = approvalFor(d.estimated_cost, await approvalThreshold());
+  if (approval && APPROVAL_GATED.includes(status)) {
+    return c.json({ error: "This work order needs approval before it can be in progress or completed. Save it as open or assigned, then approve it." }, 400);
+  }
+  const completedAt = d.completed_at ?? (status === "completed" ? new Date().toISOString().slice(0, 10) : null);
   const result = await run(
-    `INSERT INTO work_orders (property_id, unit_id, tenant_id, vendor_id, title, description, priority, status, scheduled_at, completed_at, cost, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO work_orders (property_id, unit_id, tenant_id, vendor_id, title, description, priority, status, scheduled_at, completed_at, cost, estimated_cost, approval_status, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       d.property_id ?? null, d.unit_id ?? null, d.tenant_id ?? null, d.vendor_id ?? null,
       d.title, d.description ?? null,
-      d.priority ?? "normal", d.status ?? "open",
-      d.scheduled_at ?? null, d.completed_at ?? null,
-      d.cost ?? null, d.notes ?? null,
+      d.priority ?? "normal", status,
+      d.scheduled_at ?? null, completedAt,
+      d.cost ?? null, d.estimated_cost ?? null, approval, d.notes ?? null,
     ],
   );
   const row = await get(`${WO_SELECT} WHERE w.id = ?`, [result.lastInsertRowid]);
@@ -766,7 +786,36 @@ app.put("/api/work-orders/:id", async (c) => {
   if (!id) return c.json({ error: "Invalid ID" }, 400);
   const parsed = await parseJson(c, WorkOrderInput.partial());
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const { sets, params } = buildUpdate(parsed.data);
+  const existing = await get<{ status: string; estimated_cost: number | null; approval_status: string | null }>(
+    "SELECT status, estimated_cost, approval_status FROM work_orders WHERE id = ?",
+    [id],
+  );
+  if (!existing) return c.json({ error: "Not found" }, 404);
+  const patch: Record<string, unknown> = { ...parsed.data };
+
+  // A changed estimate re-evaluates approval (and drops any earlier decision).
+  let approval = existing.approval_status;
+  if (parsed.data.estimated_cost !== undefined && parsed.data.estimated_cost !== existing.estimated_cost) {
+    approval = approvalFor(parsed.data.estimated_cost, await approvalThreshold());
+    patch.approval_status = approval;
+    patch.approved_at = null;
+  }
+
+  const nextStatus = parsed.data.status;
+  const statusChanging = nextStatus !== undefined && nextStatus !== existing.status;
+  if (statusChanging && APPROVAL_GATED.includes(nextStatus) && (approval === "pending" || approval === "rejected")) {
+    return c.json({
+      error: approval === "rejected"
+        ? "This work order's approval was rejected, so it can't be in progress or completed."
+        : "This work order needs approval before it can be in progress or completed.",
+    }, 400);
+  }
+  if (statusChanging && parsed.data.completed_at === undefined) {
+    if (nextStatus === "completed") patch.completed_at = new Date().toISOString().slice(0, 10);
+    else if (existing.status === "completed") patch.completed_at = null;
+  }
+
+  const { sets, params } = buildUpdate(patch);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   params.push(id);
   const r = await run(`UPDATE work_orders SET ${sets.join(", ")} WHERE id = ?`, params);
@@ -781,6 +830,209 @@ app.delete("/api/work-orders/:id", async (c) => {
   const r = await run("DELETE FROM work_orders WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
   return c.json({ ok: true });
+});
+
+app.post("/api/work-orders/:id/approval", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const parsed = await parseJson(c, z.object({ decision: z.enum(["approved", "rejected"]) }));
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const existing = await get<{ approval_status: string | null }>("SELECT approval_status FROM work_orders WHERE id = ?", [id]);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+  if (!existing.approval_status) return c.json({ error: "This work order doesn't require approval" }, 409);
+  const approved = parsed.data.decision === "approved";
+  await run(
+    `UPDATE work_orders SET approval_status = ?, approved_at = ${approved ? "datetime('now')" : "NULL"} WHERE id = ?`,
+    [parsed.data.decision, id],
+  );
+  const row = await get(`${WO_SELECT} WHERE w.id = ?`, [id]);
+  return c.json({ work_order: row });
+});
+
+// ── Recurring tasks (preventive maintenance) ───────────────────────
+
+// Look-ahead for generation: occurrences up to this many days out become work orders.
+const GENERATE_HORIZON_DAYS = 14;
+// Safety bound on occurrence stepping per template; stepping starts near the anchor date.
+const MAX_OCCURRENCE_STEPS = 5_000;
+// Calendar date with a real month/day range (DATE_RE only checks the shape).
+const STRICT_DATE_RE = /^2\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+// The client sends its local date; allow the timezone gap, reject a skewed clock.
+const MAX_CLIENT_DAY_SKEW = 1;
+
+const RecurringTaskInput = z.object({
+  property_id: z.number().int(),
+  unit_id: z.number().int().nullable().optional(),
+  vendor_id: z.number().int().nullable().optional(),
+  title: z.string().trim().min(1),
+  description: z.string().optional().nullable(),
+  priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+  estimated_cost: z.number().min(0).optional().nullable(),
+  interval_unit: z.enum(["week", "month"]),
+  interval_count: z.number().int().min(1).max(24),
+  start_date: z.string().regex(STRICT_DATE_RE),
+  active: z.boolean().optional(),
+});
+
+type RecurringTask = {
+  id: number; property_id: number; unit_id: number | null; vendor_id: number | null;
+  title: string; description: string | null; priority: string; estimated_cost: number | null;
+  interval_unit: "week" | "month"; interval_count: number; start_date: string;
+  last_generated_through: string | null; active: number;
+};
+
+const isoDay = (d: Date) => d.toISOString().slice(0, 10);
+
+/**
+ * The k-th occurrence (k = 0 is start_date). Months are measured from the start date and
+ * clamp to month end, so a Jan 31 start gives Feb 28/29, then Mar 31 (not Mar 28).
+ */
+function occurrence(start: string, unit: "week" | "month", count: number, k: number): string {
+  const [y, m, d] = start.split("-").map(Number);
+  if (unit === "week") return isoDay(new Date(Date.UTC(y, m - 1, d + 7 * count * k)));
+  const months = m - 1 + count * k;
+  const year = y + Math.floor(months / 12);
+  const month = months % 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return isoDay(new Date(Date.UTC(year, month, Math.min(d, lastDay))));
+}
+
+/** An occurrence index at or just before `date`, so loops start near it rather than at k = 0. */
+function kNear(t: RecurringTask, date: string): number {
+  const [sy, sm, sd] = t.start_date.split("-").map(Number);
+  const [y, m, d] = date.split("-").map(Number);
+  const k = t.interval_unit === "week"
+    ? Math.floor((Date.UTC(y, m - 1, d) - Date.UTC(sy, sm - 1, sd)) / (86_400_000 * 7 * t.interval_count))
+    : Math.floor(((y - sy) * 12 + (m - sm)) / t.interval_count);
+  return Math.max(0, k - 1);
+}
+
+/**
+ * Occurrences to generate for a template: those after its high-water mark up to `horizon`.
+ * A template's first generation doesn't backfill past dates. After that, of the occurrences
+ * already in the past only the latest is kept, so a missed stretch yields one overdue work
+ * order rather than a backlog.
+ */
+function dueOccurrences(t: RecurringTask, today: string, horizon: string): string[] {
+  const out: string[] = [];
+  let lastPast: string | null = null;
+  const k0 = kNear(t, t.last_generated_through ?? today);
+  for (let k = k0; k < k0 + MAX_OCCURRENCE_STEPS; k++) {
+    const occ = occurrence(t.start_date, t.interval_unit, t.interval_count, k);
+    if (occ > horizon) break;
+    if (t.last_generated_through && occ <= t.last_generated_through) continue;
+    if (occ >= today) out.push(occ);
+    else if (t.last_generated_through) lastPast = occ;
+  }
+  return lastPast ? [lastPast, ...out] : out;
+}
+
+/**
+ * Next occurrence that generation will create, for display: after the high-water mark, or,
+ * before the first generation, the first one from today on (past dates aren't backfilled).
+ */
+function nextOccurrence(t: RecurringTask, today: string): string | null {
+  const after = t.last_generated_through;
+  const k0 = kNear(t, after ?? today);
+  for (let k = k0; k < k0 + MAX_OCCURRENCE_STEPS; k++) {
+    const occ = occurrence(t.start_date, t.interval_unit, t.interval_count, k);
+    if (after ? occ > after : occ >= today) return occ;
+  }
+  return null;
+}
+
+const RT_SELECT = `
+  SELECT r.*, p.name as property_name, u.name as unit_name, v.name as vendor_name
+  FROM recurring_tasks r
+  LEFT JOIN properties p ON p.id = r.property_id
+  LEFT JOIN units u ON u.id = r.unit_id
+  LEFT JOIN vendors v ON v.id = r.vendor_id
+`;
+
+const withNext = (t: RecurringTask) => ({ ...t, active: !!t.active, next_occurrence: nextOccurrence(t, isoDay(new Date())) });
+
+app.get("/api/recurring-tasks", async (c) => {
+  const rows = await query<RecurringTask>(`${RT_SELECT} ORDER BY r.active DESC, p.name, r.title`);
+  return c.json({ recurring_tasks: rows.map(withNext) });
+});
+
+app.post("/api/recurring-tasks", async (c) => {
+  const parsed = await parseJson(c, RecurringTaskInput);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const d = parsed.data;
+  const result = await run(
+    `INSERT INTO recurring_tasks (property_id, unit_id, vendor_id, title, description, priority, estimated_cost, interval_unit, interval_count, start_date, active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      d.property_id, d.unit_id ?? null, d.vendor_id ?? null, d.title, d.description ?? null,
+      d.priority ?? "normal", d.estimated_cost ?? null, d.interval_unit, d.interval_count, d.start_date,
+      d.active === false ? 0 : 1,
+    ],
+  );
+  const row = await get<RecurringTask>(`${RT_SELECT} WHERE r.id = ?`, [result.lastInsertRowid]);
+  return c.json({ recurring_task: row && withNext(row) }, 201);
+});
+
+app.put("/api/recurring-tasks/:id", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const parsed = await parseJson(c, RecurringTaskInput.partial());
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const { active, ...rest } = parsed.data;
+  const { sets, params } = buildUpdate({ ...rest, active: active === undefined ? undefined : active ? 1 : 0 });
+  if (!sets.length) return c.json({ error: "No fields" }, 400);
+  params.push(id);
+  const r = await run(`UPDATE recurring_tasks SET ${sets.join(", ")} WHERE id = ?`, params);
+  if (!r.changes) return c.json({ error: "Not found" }, 404);
+  const row = await get<RecurringTask>(`${RT_SELECT} WHERE r.id = ?`, [id]);
+  return c.json({ recurring_task: row && withNext(row) });
+});
+
+app.delete("/api/recurring-tasks/:id", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  // Generated work orders are kept; their recurring_task_id is set to NULL by the FK.
+  const r = await run("DELETE FROM recurring_tasks WHERE id = ?", [id]);
+  if (!r.changes) return c.json({ error: "Not found" }, 404);
+  return c.json({ ok: true });
+});
+
+app.post("/api/recurring-tasks/generate", async (c) => {
+  const parsed = await parseJson(c, z.object({ today: z.string().regex(STRICT_DATE_RE).optional() }));
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const serverToday = isoDay(new Date());
+  const today = parsed.data.today ?? serverToday;
+  const [y, m, d] = today.split("-").map(Number);
+  // The high-water mark only moves forward, so a wrong clock here would stall generation.
+  const [sy, sm, sd] = serverToday.split("-").map(Number);
+  if (Math.abs(Date.UTC(y, m - 1, d) - Date.UTC(sy, sm - 1, sd)) > MAX_CLIENT_DAY_SKEW * 86_400_000) {
+    return c.json({ error: "Your device's date looks wrong. Check the date and time settings, then try again." }, 400);
+  }
+  const horizon = isoDay(new Date(Date.UTC(y, m - 1, d + GENERATE_HORIZON_DAYS)));
+  const tasks = await query<RecurringTask>("SELECT * FROM recurring_tasks WHERE active = 1");
+  const threshold = await approvalThreshold();
+  let created = 0;
+  for (const t of tasks) {
+    for (const occ of dueOccurrences(t, today, horizon)) {
+      // The unique (recurring_task_id, occurrence_date) index makes repeats and races no-ops.
+      const r = await run(
+        `INSERT INTO work_orders (property_id, unit_id, vendor_id, title, description, priority, status, scheduled_at, estimated_cost, approval_status, recurring_task_id, occurrence_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (recurring_task_id, occurrence_date) DO NOTHING`,
+        [
+          t.property_id, t.unit_id, t.vendor_id, t.title, t.description, t.priority,
+          t.vendor_id ? "assigned" : "open", occ, t.estimated_cost, approvalFor(t.estimated_cost, threshold), t.id, occ,
+        ],
+      );
+      created += r.changes ?? 0;
+    }
+    // High-water mark only moves forward, so deleted or rescheduled work isn't regenerated.
+    await run(
+      "UPDATE recurring_tasks SET last_generated_through = MAX(COALESCE(last_generated_through, ''), ?) WHERE id = ?",
+      [horizon, t.id],
+    );
+  }
+  return c.json({ created, through: horizon });
 });
 
 // ── Applications ───────────────────────────────────────────────────
@@ -911,6 +1163,7 @@ app.get("/api/dashboard/summary", async (c) => {
     followupsDue,
     expiredLeases,
     renewalSetting,
+    overdueWorkOrders,
   ] = await Promise.all([
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM properties", [], { n: 0 }),
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM units", [], { n: 0 }),
@@ -941,14 +1194,16 @@ app.get("/api/dashboard/summary", async (c) => {
       "SELECT COUNT(*) as n FROM work_orders WHERE priority = 'urgent' AND status NOT IN ('completed', 'cancelled')",
       [], { n: 0 },
     ),
-    safeQuery<{ id: number; title: string; priority: string; status: string; property_name: string | null; unit_name: string | null; created_at: string }>(
-      `SELECT w.id, w.title, w.priority, w.status, p.name as property_name, u.name as unit_name, w.created_at
+    safeQuery<{ id: number; title: string; priority: string; status: string; scheduled_at: string | null; property_name: string | null; unit_name: string | null; created_at: string }>(
+      `SELECT w.id, w.title, w.priority, w.status, w.scheduled_at, p.name as property_name, u.name as unit_name, w.created_at
        FROM work_orders w
        LEFT JOIN properties p ON p.id = w.property_id
        LEFT JOIN units u ON u.id = w.unit_id
        WHERE w.status NOT IN ('completed', 'cancelled')
-       ORDER BY CASE w.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, w.created_at DESC
+       ORDER BY CASE WHEN substr(w.scheduled_at, 1, 10) < ? THEN 0 ELSE 1 END,
+         CASE w.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, w.created_at DESC
        LIMIT 6`,
+      [localToday],
     ),
     safeQuery<{ id: number; end_date: string; tenant_first_name: string | null; tenant_last_name: string | null; unit_name: string | null; property_name: string | null }>(
       `SELECT l.id, l.end_date,
@@ -985,6 +1240,10 @@ app.get("/api/dashboard/summary", async (c) => {
       [localToday],
     ),
     safeGet<{ value: string }>("SELECT value FROM settings WHERE key = 'renewal_notice_days'", [], { value: "60" }),
+    safeGet<{ n: number }>(
+      "SELECT COUNT(*) as n FROM work_orders WHERE status NOT IN ('completed', 'cancelled') AND substr(scheduled_at, 1, 10) < ?",
+      [localToday], { n: 0 },
+    ),
   ]);
 
   return c.json({
@@ -1002,6 +1261,7 @@ app.get("/api/dashboard/summary", async (c) => {
     overdue_count: overdueRow.n,
     open_work_orders: openWorkOrders.n,
     urgent_work_orders: urgentWorkOrders.n,
+    overdue_work_orders: overdueWorkOrders.n,
     recent_work_orders: recentWorkOrders,
     upcoming_expirations: upcomingExpirations,
     renewal_notice_days: parseInt(renewalSetting.value, 10) || 60,

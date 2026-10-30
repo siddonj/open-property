@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/context";
+import { formatDate, formatMoney, toIsoDate } from "@/lib/utils";
+import { ApprovalBadge } from "./approval-badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { Unit, WorkOrder, WorkOrderPriority, WorkOrderStatus } from "@/types";
+import type { ApprovalStatus, Unit, WorkOrder, WorkOrderPriority, WorkOrderStatus } from "@/types";
 
 interface Props {
   open: boolean;
@@ -43,8 +45,12 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
   const [status, setStatus] = useState<WorkOrderStatus>("open");
   const [scheduledAt, setScheduledAt] = useState("");
   const [cost, setCost] = useState("");
+  const [estimate, setEstimate] = useState("");
+  const [approval, setApproval] = useState<ApprovalStatus | null>(null);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
+  // Shown inside the dialog: the app error banner sits behind the modal overlay.
+  const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -69,7 +75,10 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
     setStatus(workOrder?.status ?? "open");
     setScheduledAt(workOrder?.scheduled_at?.slice(0, 10) ?? "");
     setCost(workOrder?.cost != null ? String(workOrder.cost) : "");
+    setEstimate(workOrder?.estimated_cost != null ? String(workOrder.estimated_cost) : "");
+    setApproval(workOrder?.approval_status ?? null);
     setNotes(workOrder?.notes ?? "");
+    setFormError(null);
   }, [open, workOrder, defaults]);
 
   const filteredUnits = useMemo(() => {
@@ -88,6 +97,7 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
   async function save() {
     if (!title.trim()) return;
     setSaving(true);
+    setFormError(null);
     try {
       const payload = {
         property_id: propertyId ? Number(propertyId) : null,
@@ -99,7 +109,10 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
         status,
         scheduled_at: scheduledAt || null,
         cost: cost ? parseFloat(cost) : null,
+        estimated_cost: estimate ? parseFloat(estimate) : null,
         notes: notes.trim() || null,
+        // Record completion on the operator's local date (the server would use UTC).
+        ...(status === "completed" && workOrder?.status !== "completed" ? { completed_at: toIsoDate(new Date()) } : {}),
       };
       if (workOrder) {
         await app.updateWorkOrder(workOrder.id, payload);
@@ -109,11 +122,29 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
       onSaved?.();
       onOpenChange(false);
     } catch (err) {
-      app.setError((err as Error).message);
+      setFormError((err as Error).message);
     } finally {
       setSaving(false);
     }
   }
+
+  async function decide(decision: "approved" | "rejected") {
+    if (!workOrder) return;
+    try {
+      const updated = await app.decideApproval(workOrder.id, decision);
+      setApproval(updated.approval_status);
+      setFormError(null);
+      onSaved?.();
+    } catch (err) {
+      setFormError((err as Error).message);
+    }
+  }
+
+  const threshold = app.settings.maintenance_approval_threshold;
+  const estimateNum = estimate ? parseFloat(estimate) : null;
+  // Mirrors the server rule so the operator sees the requirement before saving.
+  const needsApproval = threshold > 0 && estimateNum != null && estimateNum > threshold;
+  const estimateChanged = (workOrder?.estimated_cost ?? null) !== estimateNum;
 
   async function remove() {
     if (!workOrder) return;
@@ -198,22 +229,63 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
               </Select>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <Label htmlFor="wo-sched">Scheduled date</Label>
               <Input id="wo-sched" type="date" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
             </div>
             <div>
-              <Label htmlFor="wo-cost">Cost</Label>
-              <Input id="wo-cost" type="number" value={cost} onChange={(e) => setCost(e.target.value)} />
+              <Label htmlFor="wo-est">Estimated cost</Label>
+              <Input id="wo-est" type="number" min={0} value={estimate} onChange={(e) => setEstimate(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="wo-cost">Actual cost</Label>
+              <Input id="wo-cost" type="number" min={0} value={cost} onChange={(e) => setCost(e.target.value)} />
             </div>
           </div>
+          {(approval || needsApproval) && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+              {workOrder && approval && !estimateChanged ? (
+                <>
+                  <ApprovalBadge status={approval} />
+                  {approval === "approved" && workOrder.approved_at && (
+                    <span className="text-xs text-muted-foreground">on {formatDate(workOrder.approved_at.slice(0, 10))}</span>
+                  )}
+                  {needsApproval && (
+                    <span className="text-xs text-muted-foreground">
+                      Estimate is over the {formatMoney(threshold, app.settings.currency)} approval threshold.
+                    </span>
+                  )}
+                  <div className="ml-auto flex gap-2">
+                    {approval !== "approved" && <Button type="button" size="sm" onClick={() => decide("approved")}>Approve</Button>}
+                    {approval !== "rejected" && <Button type="button" size="sm" variant="outline" onClick={() => decide("rejected")}>Reject</Button>}
+                  </div>
+                </>
+              ) : needsApproval ? (
+                <span className="text-xs text-muted-foreground">
+                  Over the {formatMoney(threshold, app.settings.currency)} threshold: this will need approval before it can be in progress or completed.
+                </span>
+              ) : (
+                <span className="text-xs text-muted-foreground">Saving this estimate removes the approval requirement.</span>
+              )}
+            </div>
+          )}
+          {workOrder?.occurrence_date && (
+            <p className="text-xs text-muted-foreground">
+              Generated from a recurring task for {formatDate(workOrder.occurrence_date)}.
+            </p>
+          )}
           <div>
             <Label htmlFor="wo-notes">Notes</Label>
             <Textarea id="wo-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
           </div>
         </div>
 
+        {formError && (
+          <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {formError}
+          </p>
+        )}
         <DialogFooter className="mt-2">
           {workOrder && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>

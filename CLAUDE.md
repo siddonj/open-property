@@ -29,7 +29,7 @@ There is no test suite and no lint script configured in `package.json`. `pnpm ty
 
 Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLite) database. In dev, Vite proxies `/api/*` to Wrangler on :8787 (see `vite.config.ts`); in production both are served by the same Worker.
 
-- `src/server/index.ts` — every API route lives in this one Hono file (~1,100 lines), organized in commented sections per entity (Properties, Units, Tenants, Leases, Lease checklists, Rent, Maintenance, Vendors, Applications, Dashboard, Settings, Reports). New endpoints should follow the existing section, not create new files, unless the file grows unreasonably.
+- `src/server/index.ts` — every API route lives in this one Hono file (~1,400 lines), organized in commented sections per entity (Properties, Units, Tenants, Leases, Lease checklists, Rent, Maintenance, Recurring tasks, Vendors, Applications, Dashboard, Settings, Reports). New endpoints should follow the existing section, not create new files, unless the file grows unreasonably.
 - `src/server/db.ts` — re-exports `initDB`/`query`/`get`/`run` from `@clawnify/db`, the D1 adapter package. All DB access goes through these three functions; there is no ORM.
 - `src/server/schema.sql` — baseline schema + seed data (3 properties, 5 units, 3 vendors). Applied on every `pnpm dev` via `db:migrate`. Don't add columns here: `CREATE TABLE IF NOT EXISTS` can't alter existing databases.
 - `migrations/NNNN_<name>.sql` — schema changes after the baseline, applied once each by `wrangler d1 migrations apply` (tracked in `d1_migrations`). Remote databases need `wrangler d1 migrations apply open-property-db --remote`.

@@ -15,12 +15,12 @@ Rental property management with everything you need to run a portfolio: properti
 ### Dashboard
 - **At-a-glance KPIs** — occupancy rate, active leases, outstanding rent, open work orders
 - **This month's rent** — collected, outstanding, overdue at a glance
-- **Open work orders** + **lease expirations** — expired-but-still-active leases and those inside the renewal window
+- **Open work orders** (overdue first, with an overdue count) + **lease expirations** — expired-but-still-active leases and those inside the renewal window
 - **Application follow-ups due** — active applications whose follow-up date has arrived
 
 ### Properties & units
 - Property cards with type, address, color tag, occupancy snapshot
-- Per-property page with summary tiles, unit grid, and the property's open work orders
+- Per-property page with summary tiles, unit grid, and the property's work orders (open / completed / all, filterable by unit)
 - Units track bedrooms, bathrooms, square footage, market rent, and status (vacant / occupied / turnover / unavailable)
 
 ### Tenants
@@ -48,13 +48,17 @@ Rental property management with everything you need to run a portfolio: properti
 
 ### Maintenance
 - Work orders with title, description, priority (urgent / high / normal / low), and status (open / assigned / in progress / completed / cancelled)
-- Tabs: open / unassigned / assigned / in progress / completed / all
-- Link work orders to a property, unit, and vendor; track scheduled date and cost
+- Tabs: open / unassigned / assigned / in progress / completed / all, plus schedule (overdue / due in 7 days / unscheduled), property, and unit filters
+- Link work orders to a property, unit, and vendor; track scheduled date, estimated cost, and actual cost
+- Overdue work is labeled with days overdue; completion date is recorded automatically
+- **Recurring tasks** — weekly or monthly preventive-maintenance templates. "Generate due tasks" creates work orders for the next 14 days without duplicates; a missed stretch yields one overdue work order, not a backlog
+- **Approval threshold** — work orders whose estimate exceeds the threshold (Settings) need approval before they can be in progress or completed
 
 ### Vendors & policy
 - Vendor directory by category (plumber / electrician / HVAC / handyman / cleaning / landscaping / general)
 - Rent policy defaults: due day, late fee, grace days, currency
 - Lease renewal window (days before end date that a lease is flagged)
+- Maintenance approval threshold (empty = approval off)
 
 ## Stack
 
@@ -114,7 +118,7 @@ migrations/         Numbered schema changes applied after the baseline
       applications/ Applications pipeline + application dialog
       leases/       Leases page, lease dialog, move-in/out checklist dialog
       rent/         Rent ledger + payment dialog
-      maintenance/  Work orders board + work-order dialog
+      maintenance/  Work orders board, work-order dialog, recurring tasks
       settings/     Vendors + rent policy defaults
       ui/           Vendored shadcn primitives
     hooks/          use-router, use-app-state

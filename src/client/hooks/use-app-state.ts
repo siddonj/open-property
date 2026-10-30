@@ -8,6 +8,9 @@ import type {
   RentCharge,
   Vendor,
   WorkOrder,
+  RecurringTask,
+  NewRecurringTask,
+  ApprovalStatus,
   Application,
   NewApplication,
   ChecklistKind,
@@ -30,6 +33,8 @@ export interface AppSettings {
   late_fee_grace_days: number;
   currency: string;
   renewal_notice_days: number;
+  /** 0 = approval disabled. */
+  maintenance_approval_threshold: number;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -38,6 +43,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   late_fee_grace_days: 5,
   currency: "USD",
   renewal_notice_days: 60,
+  maintenance_approval_threshold: 0,
 };
 
 function parseSettings(raw: Record<string, string>): AppSettings {
@@ -51,6 +57,7 @@ function parseSettings(raw: Record<string, string>): AppSettings {
     late_fee_grace_days: num("late_fee_grace_days", DEFAULT_SETTINGS.late_fee_grace_days),
     currency: raw.currency || DEFAULT_SETTINGS.currency,
     renewal_notice_days: num("renewal_notice_days", DEFAULT_SETTINGS.renewal_notice_days),
+    maintenance_approval_threshold: num("maintenance_approval_threshold", DEFAULT_SETTINGS.maintenance_approval_threshold),
   };
 }
 
@@ -261,6 +268,34 @@ export function useAppState() {
     await api("DELETE", `/api/work-orders/${id}`);
   }, []);
 
+  const decideApproval = useCallback(async (id: number, decision: Exclude<ApprovalStatus, "pending">) => {
+    const res = await api<{ work_order: WorkOrder }>("POST", `/api/work-orders/${id}/approval`, { decision });
+    return res.work_order;
+  }, []);
+
+  // Recurring tasks ──────────────────────────────────────────────
+
+  const listRecurringTasks = useCallback(async (): Promise<RecurringTask[]> => {
+    const data = await api<{ recurring_tasks: RecurringTask[] }>("GET", "/api/recurring-tasks");
+    return data.recurring_tasks;
+  }, []);
+
+  const createRecurringTask = useCallback(async (data: NewRecurringTask) => {
+    await api("POST", "/api/recurring-tasks", data);
+  }, []);
+
+  const updateRecurringTask = useCallback(async (id: number, patch: Partial<NewRecurringTask>) => {
+    await api("PUT", `/api/recurring-tasks/${id}`, patch);
+  }, []);
+
+  const deleteRecurringTask = useCallback(async (id: number) => {
+    await api("DELETE", `/api/recurring-tasks/${id}`);
+  }, []);
+
+  const generateRecurringTasks = useCallback(async (today: string) => {
+    return api<{ created: number; through: string }>("POST", "/api/recurring-tasks/generate", { today });
+  }, []);
+
   // Lease checklists ─────────────────────────────────────────────
 
   const listChecklists = useCallback(async (leaseId: number): Promise<LeaseChecklist[]> => {
@@ -362,7 +397,9 @@ export function useAppState() {
     // vendors
     createVendor, updateVendor, deleteVendor,
     // work orders
-    listWorkOrders, createWorkOrder, updateWorkOrder, deleteWorkOrder,
+    listWorkOrders, createWorkOrder, updateWorkOrder, deleteWorkOrder, decideApproval,
+    // recurring tasks
+    listRecurringTasks, createRecurringTask, updateRecurringTask, deleteRecurringTask, generateRecurringTasks,
     // lease checklists
     listChecklists, createChecklist, addChecklistItem, updateChecklistItem, deleteChecklistItem,
     // applications
