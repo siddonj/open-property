@@ -26,6 +26,7 @@ import type {
   NewWorkOrder,
   NewVendor,
   IncomeReport,
+  ProfitLossReport,
   MaintenanceReport,
   DelinquencyRow,
   OccupancyReport,
@@ -284,8 +285,11 @@ export function useAppState() {
     return data.accounts;
   }, []);
 
-  const listBills = useCallback(async (): Promise<Bill[]> => {
-    const data = await api<{ bills: Bill[] }>("GET", "/api/bills");
+  const listBills = useCallback(async (params?: { property_id?: number; status?: "paid" | "unpaid" }): Promise<Bill[]> => {
+    const qs = new URLSearchParams();
+    if (params?.property_id) qs.set("property_id", String(params.property_id));
+    if (params?.status) qs.set("status", params.status);
+    const data = await api<{ bills: Bill[] }>("GET", qs.toString() ? `/api/bills?${qs.toString()}` : "/api/bills");
     return data.bills;
   }, []);
 
@@ -387,12 +391,19 @@ export function useAppState() {
 
   // Reports ──────────────────────────────────────────────────────
 
-  const getIncomeReport = useCallback(async (params?: { from?: string; to?: string }): Promise<IncomeReport> => {
+  const getIncomeReport = useCallback(async (params?: { from?: string; to?: string; property_id?: number }): Promise<IncomeReport> => {
     const qs = new URLSearchParams();
     if (params?.from) qs.set("from", params.from);
     if (params?.to) qs.set("to", params.to);
+    if (params?.property_id) qs.set("property_id", String(params.property_id));
     const path = qs.toString() ? `/api/reports/income?${qs.toString()}` : "/api/reports/income";
     return api<IncomeReport>("GET", path);
+  }, []);
+
+  const getProfitLossReport = useCallback(async (params: { from: string; to: string; property_id?: number }): Promise<ProfitLossReport> => {
+    const qs = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.property_id) qs.set("property_id", String(params.property_id));
+    return api<ProfitLossReport>("GET", `/api/reports/profit-loss?${qs.toString()}`);
   }, []);
 
   const getMaintenanceReport = useCallback(async (params?: { from?: string; to?: string; property_id?: number; vendor_id?: number }): Promise<MaintenanceReport> => {
@@ -447,7 +458,7 @@ export function useAppState() {
     // applications
     listApplications, createApplication, updateApplication, deleteApplication,
     // reports
-    getIncomeReport, getMaintenanceReport, getDelinquencyReport, getOccupancyReport,
+    getIncomeReport, getProfitLossReport, getMaintenanceReport, getDelinquencyReport, getOccupancyReport,
   };
 }
 

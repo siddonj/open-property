@@ -381,6 +381,36 @@ export interface IncomeReport {
   months: IncomeReportMonth[];
 }
 
+export interface ProfitLossMonth {
+  period: string;
+  rent_charged_cents: number;
+  rent_collected_cents: number;
+  operating_paid_cents: number;
+  operating_unpaid_cents: number;
+  operating_cents: number;
+  net_operating_cents: number;
+  below_noi_cents: number;
+  capital_cents: number;
+}
+
+export type AccountGroup = "operating" | "below_noi" | "capital";
+
+export interface ProfitLossAccount {
+  account_id: number;
+  code: string;
+  name: string;
+  group: AccountGroup;
+  amount_cents: number;
+}
+
+export interface ProfitLossReport {
+  from: string;
+  to: string;
+  property_id: number | null;
+  months: ProfitLossMonth[];
+  accounts: ProfitLossAccount[];
+}
+
 export interface MaintenanceReport {
   from: string;
   to: string;

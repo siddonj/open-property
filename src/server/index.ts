@@ -1645,21 +1645,106 @@ function addMonthsSql(period: string, delta: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+const RANGE_ERROR = "from/to must be 'YYYY-MM' (1900–2999), from <= to, spanning at most 36 months";
+
+// Rent filtered to one property goes lease → unit → property; a lease whose unit was deleted drops out.
+function rentScope(propertyId: number | null): { join: string; where: string; params: unknown[] } {
+  return propertyId
+    ? { join: " JOIN leases l ON l.id = rc.lease_id JOIN units u ON u.id = l.unit_id", where: " AND u.property_id = ?", params: [propertyId] }
+    : { join: "", where: "", params: [] };
+}
+
 app.get("/api/reports/income", async (c) => {
   const range = periodRange(c);
-  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' (1900–2999), from <= to, spanning at most 36 months" }, 400);
+  if (!range) return c.json({ error: RANGE_ERROR }, 400);
+  const propertyRaw = c.req.query("property_id");
+  const propertyId = intParam(propertyRaw);
+  if (propertyRaw !== undefined && !propertyId) return c.json({ error: "Invalid property_id" }, 400);
+  const scope = rentScope(propertyId);
   const rows = await query(
-    `SELECT period,
-       SUM(amount) as charged,
-       SUM(amount_paid) as collected,
-       SUM(amount - amount_paid) as outstanding
-     FROM rent_charges
-     WHERE period >= ? AND period <= ?
-     GROUP BY period
-     ORDER BY period`,
-    [range.from, range.to],
+    `SELECT rc.period,
+       SUM(rc.amount) as charged,
+       SUM(rc.amount_paid) as collected,
+       SUM(rc.amount - rc.amount_paid) as outstanding
+     FROM rent_charges rc${scope.join}
+     WHERE rc.period >= ? AND rc.period <= ?${scope.where}
+     GROUP BY rc.period
+     ORDER BY rc.period`,
+    [range.from, range.to, ...scope.params],
   );
   return c.json({ from: range.from, to: range.to, months: rows });
+});
+
+type LineActual = { period: string; account_id: number; code: string; name: string; type: string; is_operating: number; is_paid: number; amount_cents: number };
+
+/** Bill-line totals per month, account, and paid state, for complete bills only (D8). Shared by P&L and budget. */
+async function billLineActuals(from: string, to: string, propertyId: number | null): Promise<LineActual[]> {
+  return query<LineActual>(
+    `SELECT substr(b.bill_date, 1, 7) AS period, a.id AS account_id, a.code, a.name, a.type, a.is_operating,
+       CASE WHEN (SELECT COALESCE(SUM(amount_cents), 0) FROM bill_payments WHERE bill_id = b.id AND voided_at IS NULL)
+              >= (SELECT SUM(amount_cents) FROM bill_lines WHERE bill_id = b.id) THEN 1 ELSE 0 END AS is_paid,
+       SUM(l.amount_cents) AS amount_cents
+     FROM bill_lines l
+     JOIN bills b ON b.id = l.bill_id
+     JOIN gl_accounts a ON a.id = l.account_id
+     WHERE b.complete = 1 AND substr(b.bill_date, 1, 7) BETWEEN ? AND ?${propertyId ? " AND b.property_id = ?" : ""}
+     GROUP BY period, a.id, is_paid`,
+    propertyId ? [from, to, propertyId] : [from, to],
+  );
+}
+
+type AccountGroup = "operating" | "below_noi" | "capital";
+const accountGroup = (a: { type: string; is_operating: number }): AccountGroup =>
+  a.type === "asset" ? "capital" : a.is_operating ? "operating" : "below_noi";
+
+// Rent by charge period (D3), converted to cents per row; expenses by bill-date month.
+// A bill counts as paid only when fully paid; partial payments stay in unpaid.
+app.get("/api/reports/profit-loss", async (c) => {
+  const range = periodRange(c);
+  if (!range) return c.json({ error: RANGE_ERROR }, 400);
+  const propertyRaw = c.req.query("property_id");
+  const propertyId = intParam(propertyRaw);
+  if (propertyRaw !== undefined && !propertyId) return c.json({ error: "Invalid property_id" }, 400);
+  const scope = rentScope(propertyId);
+  const rent = await query<{ period: string; charged_cents: number; collected_cents: number }>(
+    `SELECT rc.period,
+       SUM(CAST(ROUND(rc.amount * 100) AS INTEGER)) AS charged_cents,
+       SUM(CAST(ROUND(rc.amount_paid * 100) AS INTEGER)) AS collected_cents
+     FROM rent_charges rc${scope.join}
+     WHERE rc.period >= ? AND rc.period <= ?${scope.where}
+     GROUP BY rc.period`,
+    [range.from, range.to, ...scope.params],
+  );
+  const lines = await billLineActuals(range.from, range.to, propertyId);
+
+  const months = [];
+  for (let period = range.from; period <= range.to; period = addMonthsSql(period, 1)) {
+    const r = rent.find((x) => x.period === period);
+    const m = lines.filter((l) => l.period === period);
+    const sum = (f: (l: LineActual) => boolean) => m.filter(f).reduce((s, l) => s + l.amount_cents, 0);
+    const opPaid = sum((l) => accountGroup(l) === "operating" && !!l.is_paid);
+    const opUnpaid = sum((l) => accountGroup(l) === "operating" && !l.is_paid);
+    const collected = r?.collected_cents ?? 0;
+    months.push({
+      period,
+      rent_charged_cents: r?.charged_cents ?? 0,
+      rent_collected_cents: collected,
+      operating_paid_cents: opPaid,
+      operating_unpaid_cents: opUnpaid,
+      operating_cents: opPaid + opUnpaid,
+      net_operating_cents: collected - opPaid - opUnpaid,
+      below_noi_cents: sum((l) => accountGroup(l) === "below_noi"),
+      capital_cents: sum((l) => accountGroup(l) === "capital"),
+    });
+  }
+
+  const byAccount = new Map<number, { account_id: number; code: string; name: string; group: AccountGroup; amount_cents: number }>();
+  for (const l of lines) {
+    const row = byAccount.get(l.account_id) ?? { account_id: l.account_id, code: l.code, name: l.name, group: accountGroup(l), amount_cents: 0 };
+    byAccount.set(l.account_id, { ...row, amount_cents: row.amount_cents + l.amount_cents });
+  }
+  const accounts = [...byAccount.values()].sort((a, b) => a.code.localeCompare(b.code));
+  return c.json({ from: range.from, to: range.to, property_id: propertyId, months, accounts });
 });
 
 app.get("/api/reports/maintenance", async (c) => {

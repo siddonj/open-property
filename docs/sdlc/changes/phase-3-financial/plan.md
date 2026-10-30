@@ -2,7 +2,7 @@
 
 Intent: [`intent.md`](./intent.md)
 Spec: [`spec.md`](./spec.md)
-Status: Approved 2026-10-29 (revised); Slices 0 and A built, B–D next
+Status: Approved 2026-10-29 (revised); Slices 0, A, and B built; C–D next
 
 Delivered as five slices, in order. Each slice ends with typecheck, build,
 curl, and browser checks before the next starts.
@@ -154,4 +154,24 @@ curl, and browser checks before the next starts.
   - Not atomic: checking the balance and inserting a payment, and checking for
     payments and rewriting lines, are separate statements. This is acceptable
     for a single-user app and is marked with `ponytail:` comments.
+
+- **2026-10-29 — Slice B built.** P&L and Income checked against seeded
+  charges, payments, and bills for one property over July–September 2026, and
+  all totals matched. The seed covered a partial rent payment, a 1234.565 rent
+  amount, an unpaid bill, a mixed operating and capital bill, mortgage
+  interest, a voided payment, an interrupted bill, and a bill on another
+  property. Notes:
+  - Rent rounds half-up per row: SQLite's `ROUND(1234.565 * 100)` gives 123457
+    ($1,234.57).
+  - In the P&L, a bill counts as **paid** only when fully paid; a partially
+    paid bill stays under unpaid. Partial payments exist only through the API.
+  - `billLineActuals()` is the one query for bill actuals and filters
+    `complete = 1`. The Slice C budget report reuses it.
+  - The router now matches the path only, so links can carry a query string
+    (`/reports?tab=profit-loss&property_id=3&from=…&to=…` from the property
+    page's Financials card).
+  - Orphaned leases: none exist locally (fresh database), so the
+    lease → unit → property join drops no rows here.
+  - Local test data: tenant "Pat Seed", leases 901–903, and their July–September
+    2026 rent charges were inserted directly for the P&L check.
 
