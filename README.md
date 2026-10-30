@@ -65,6 +65,8 @@ pnpm build
 
 The dev script applies `src/server/schema.sql` to the local D1 database, then runs Vite and Wrangler in parallel. The schema seeds 3 sample properties, 5 units, and 3 vendors so the app is usable on first boot.
 
+For the repository's Claude Code AI-native SDLC workflow and change templates, see [docs/sdlc/README.md](docs/sdlc/README.md).
+
 ## Deploy
 
 If you have the Clawnify CLI installed:

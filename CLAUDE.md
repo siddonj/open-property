@@ -16,6 +16,15 @@ There is no test suite and no lint script configured in `package.json`. `pnpm ty
 
 To reset local data, re-run `pnpm db:migrate` (schema.sql re-seeds sample properties/units/vendors).
 
+## AI-assisted SDLC
+
+- For substantial changes, use the repository-local `/ai-native-sdlc` skill and its Plan → Design → Build → Test → Deploy → Maintain workflow. See [docs/sdlc/README.md](docs/sdlc/README.md).
+- Keep change artifacts together in `docs/sdlc/changes/<slug>/` (`intent.md`, `spec.md`, and `plan.md` as appropriate). The root `intent.md` is the product roadmap, not a per-change record.
+- Scale the paperwork to the change: small fixes may use a concise plan, but still need verification.
+- Verify code changes with `pnpm typecheck` and `pnpm build`. There is currently no automated test suite; do not report tests as passing unless tests were actually run.
+- Review changes against [REVIEW.md](REVIEW.md). Report what was verified and any checks that could not be run.
+- Artifacts and review guidance do not replace human judgment. Do not commit, merge, or deploy unless the user explicitly asks.
+
 ## Architecture
 
 Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLite) database. In dev, Vite proxies `/api/*` to Wrangler on :8787 (see `vite.config.ts`); in production both are served by the same Worker.
