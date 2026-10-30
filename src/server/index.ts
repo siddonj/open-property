@@ -1040,7 +1040,9 @@ app.put("/api/settings", async (c) => {
 
 // ── Reports ────────────────────────────────────────────────────────
 
-const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+// Years 1900–2999 keep month stepping inside 4-digit years, so 'YYYY-MM' string
+// comparison in the per-month loops stays correct.
+const PERIOD_RE = /^(19|2\d)\d{2}-(0[1-9]|1[0-2])$/;
 // Upper bound on report ranges; the occupancy report runs one query per month.
 const MAX_REPORT_MONTHS = 36;
 
@@ -1054,7 +1056,8 @@ function periodRange(c: Context): { from: string; to: string } | null {
   const to = c.req.query("to") || now;
   const from = c.req.query("from") || addMonthsSql(to, -11);
   if (!PERIOD_RE.test(from) || !PERIOD_RE.test(to)) return null;
-  if (monthIndex(to) - monthIndex(from) >= MAX_REPORT_MONTHS) return null;
+  const span = monthIndex(to) - monthIndex(from);
+  if (span < 0 || span >= MAX_REPORT_MONTHS) return null;
   return { from, to };
 }
 
@@ -1066,7 +1069,7 @@ function addMonthsSql(period: string, delta: number): string {
 
 app.get("/api/reports/income", async (c) => {
   const range = periodRange(c);
-  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' and span at most 36 months" }, 400);
+  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' (1900–2999), from <= to, spanning at most 36 months" }, 400);
   const rows = await query(
     `SELECT period,
        SUM(amount) as charged,
@@ -1083,7 +1086,7 @@ app.get("/api/reports/income", async (c) => {
 
 app.get("/api/reports/maintenance", async (c) => {
   const range = periodRange(c);
-  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' and span at most 36 months" }, 400);
+  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' (1900–2999), from <= to, spanning at most 36 months" }, 400);
   const propertyId = intParam(c.req.query("property_id"));
   const vendorId = intParam(c.req.query("vendor_id"));
   const where: string[] = ["w.status = 'completed'", "w.completed_at IS NOT NULL", "strftime('%Y-%m', w.completed_at) >= ?", "strftime('%Y-%m', w.completed_at) <= ?"];
@@ -1124,7 +1127,7 @@ app.get("/api/reports/delinquency", async (c) => {
 
 app.get("/api/reports/occupancy", async (c) => {
   const range = periodRange(c);
-  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' and span at most 36 months" }, 400);
+  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' (1900–2999), from <= to, spanning at most 36 months" }, 400);
   const totalRow = await get<{ n: number }>("SELECT COUNT(*) as n FROM units");
   const totalUnits = totalRow?.n ?? 0;
   const months: { period: string; occupied_units: number; total_units: number; occupancy_rate: number }[] = [];
