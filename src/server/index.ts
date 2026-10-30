@@ -295,11 +295,13 @@ app.delete("/api/tenants/:id", async (c) => {
 
 // ── Leases ─────────────────────────────────────────────────────────
 
+const LeaseDate = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/, "must be a YYYY-MM-DD date");
+
 const LeaseInput = z.object({
   unit_id: z.number().int(),
   primary_tenant_id: z.number().int().nullable().optional(),
-  start_date: z.string(),
-  end_date: z.string(),
+  start_date: LeaseDate,
+  end_date: LeaseDate,
   monthly_rent: z.number().min(0).optional(),
   deposit: z.number().min(0).optional(),
   rent_due_day: z.number().int().min(1).max(31).optional(),
@@ -344,6 +346,22 @@ async function syncUnitOccupancy(unitId: number) {
   );
 }
 
+type LeaseShape = { unit_id: number; start_date: string; end_date: string; status: string };
+
+// Rejects end-before-start, and an active/upcoming lease overlapping another active/upcoming
+// lease on the same unit. `exceptId` is the lease being edited.
+async function leaseConflict(l: LeaseShape, exceptId: number | null): Promise<{ error: string; status: 400 | 409 } | null> {
+  if (l.end_date < l.start_date) return { error: "end_date must be on or after start_date", status: 400 };
+  if (l.status !== "active" && l.status !== "upcoming") return null;
+  const other = await get(
+    `SELECT id FROM leases
+     WHERE unit_id = ? AND id != ? AND status IN ('active', 'upcoming') AND start_date <= ? AND end_date >= ?
+     LIMIT 1`,
+    [l.unit_id, exceptId ?? 0, l.end_date, l.start_date],
+  );
+  return other ? { error: "This unit already has an active or upcoming lease covering those dates.", status: 409 } : null;
+}
+
 app.get("/api/leases", async (c) => {
   const status = c.req.query("status");
   const tenantId = intParam(c.req.query("tenant_id"));
@@ -370,6 +388,8 @@ app.post("/api/leases", async (c) => {
   const parsed = await parseJson(c, LeaseInput);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const d = parsed.data;
+  const conflict = await leaseConflict({ ...d, status: d.status ?? "active" }, null);
+  if (conflict) return c.json({ error: conflict.error }, conflict.status);
   const result = await run(
     `INSERT INTO leases (unit_id, primary_tenant_id, start_date, end_date, monthly_rent, deposit, rent_due_day, late_fee, status, notes)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -387,8 +407,16 @@ app.put("/api/leases/:id", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const { sets, params } = buildUpdate(parsed.data);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
-  const before = await get<{ unit_id: number }>("SELECT unit_id FROM leases WHERE id = ?", [id]);
+  const before = await get<LeaseShape>("SELECT unit_id, start_date, end_date, status FROM leases WHERE id = ?", [id]);
   if (!before) return c.json({ error: "Not found" }, 404);
+  const p = parsed.data;
+  const conflict = await leaseConflict({
+    unit_id: p.unit_id ?? before.unit_id,
+    start_date: p.start_date ?? before.start_date,
+    end_date: p.end_date ?? before.end_date,
+    status: p.status ?? before.status,
+  }, id);
+  if (conflict) return c.json({ error: conflict.error }, conflict.status);
   params.push(id);
   const r = await run(`UPDATE leases SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
