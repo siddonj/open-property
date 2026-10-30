@@ -2,7 +2,7 @@
 
 Intent: [`intent.md`](./intent.md)
 Spec: [`spec.md`](./spec.md)
-Status: Approved 2026-10-29 (revised); Slices 0, A, and B built; C–D next
+Status: Approved 2026-10-29 (revised); Slices 0, A, B, and C built; D next
 
 Delivered as five slices, in order. Each slice ends with typecheck, build,
 curl, and browser checks before the next starts.
@@ -174,4 +174,18 @@ curl, and browser checks before the next starts.
     lease → unit → property join drops no rows here.
   - Local test data: tenant "Pat Seed", leases 901–903, and their July–September
     2026 rent charges were inserted directly for the P&L check.
+
+- **2026-10-29 — Slice C built.** Budget vs actual was checked with curl
+  (upsert, delete via null, income and expense variance signs, unbudgeted
+  actuals, other properties excluded) and in the browser (inline edit,
+  invalid-amount guard, CSV). Notes:
+  - **No `GET /api/budgets`.** The budget report already returns every
+    account's budget beside its actual, so a separate GET would duplicate it.
+  - **Variance is signed so positive is favorable:** under budget for costs,
+    over budget for income. Group totals sum variance over budgeted lines only.
+  - **Rent revenue (5120) actual is rent collected**, the same as the P&L's net
+    operating basis. Tenant charges (5920) has no data source until Phase 6, so
+    its actual is always 0.
+  - **The tab lists every active account**, so a budget can be added to any of
+    them; there's no add-account step.
 
