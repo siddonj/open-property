@@ -1180,11 +1180,11 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 app.get("/api/dashboard/summary", async (c) => {
   const today = new Date().toISOString().slice(0, 10);
-  const periodNow = today.slice(0, 7);
   // The client's local date, so "due today" / "expired" match what the operator sees.
   // Falls back to the UTC date when absent or malformed.
   const qToday = c.req.query("today");
   const localToday = qToday && DATE_RE.test(qToday) ? qToday : today;
+  const periodNow = localToday.slice(0, 7);
 
   const safeGet = <T,>(sql: string, params: unknown[] = [], fallback: T) =>
     get<T>(sql, params).catch(() => fallback as T | undefined).then((v) => v ?? fallback);
@@ -1216,8 +1216,8 @@ app.get("/api/dashboard/summary", async (c) => {
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM units WHERE status = 'vacant'", [], { n: 0 }),
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM leases WHERE status = 'active'", [], { n: 0 }),
     safeGet<{ n: number }>(
-      "SELECT COUNT(*) as n FROM leases WHERE status = 'active' AND end_date <= date('now', '+30 days')",
-      [], { n: 0 },
+      "SELECT COUNT(*) as n FROM leases WHERE status = 'active' AND end_date <= date(?, '+30 days')",
+      [localToday], { n: 0 },
     ),
     safeGet<{ total: number }>(
       "SELECT COALESCE(SUM(amount - amount_paid), 0) as total FROM rent_charges WHERE period = ? AND status != 'waived'",
@@ -1228,8 +1228,8 @@ app.get("/api/dashboard/summary", async (c) => {
       [periodNow], { total: 0 },
     ),
     safeGet<{ total: number; n: number }>(
-      "SELECT COALESCE(SUM(amount - amount_paid), 0) as total, COUNT(*) as n FROM rent_charges WHERE due_date < date('now') AND amount_paid < amount AND status != 'waived'",
-      [], { total: 0, n: 0 },
+      "SELECT COALESCE(SUM(amount - amount_paid), 0) as total, COUNT(*) as n FROM rent_charges WHERE due_date < ? AND amount_paid < amount AND status != 'waived'",
+      [localToday], { total: 0, n: 0 },
     ),
     safeGet<{ n: number }>(
       "SELECT COUNT(*) as n FROM work_orders WHERE status NOT IN ('completed', 'cancelled')",
