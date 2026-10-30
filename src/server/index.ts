@@ -1317,11 +1317,19 @@ app.get("/api/settings", async (c) => {
   return c.json({ settings: out });
 });
 
+// Known keys only. Values arrive as strings from the client, so numbers are coerced.
+const SettingsInput = z.object({
+  default_rent_due_day: z.coerce.number().int().min(1).max(31),
+  late_fee_amount: z.coerce.number().min(0),
+  late_fee_grace_days: z.coerce.number().int().min(0).max(365),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  renewal_notice_days: z.coerce.number().int().min(1).max(365),
+}).partial().strict();
+
 app.put("/api/settings", async (c) => {
-  let body: unknown;
-  try { body = await c.req.json(); } catch { return c.json({ error: "Invalid JSON" }, 400); }
-  if (!body || typeof body !== "object") return c.json({ error: "Body must be an object" }, 400);
-  const entries = Object.entries(body as Record<string, unknown>).filter(([, v]) => v !== undefined && v !== null);
+  const parsed = await parseJson(c, SettingsInput);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const entries = Object.entries(parsed.data).filter(([, v]) => v !== undefined);
   for (const [key, value] of entries) {
     await run(
       `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
