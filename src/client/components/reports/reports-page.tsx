@@ -5,6 +5,7 @@ import { MaintenanceTab } from "./maintenance-tab";
 import { DelinquencyTab } from "./delinquency-tab";
 import { OccupancyTab } from "./occupancy-tab";
 import { ProfitLossTab } from "./profit-loss-tab";
+import { BudgetTab } from "./budget-tab";
 
 export function ReportsPage() {
   // Deep links such as /reports?tab=profit-loss&property_id=3&from=2026-01&to=2026-10 (property page Financials card).
@@ -23,6 +24,7 @@ export function ReportsPage() {
             <TabsTrigger value="rent-roll">Rent roll</TabsTrigger>
             <TabsTrigger value="income">Income</TabsTrigger>
             <TabsTrigger value="profit-loss">Profit &amp; loss</TabsTrigger>
+            <TabsTrigger value="budget">Budget</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
             <TabsTrigger value="delinquency">Delinquency</TabsTrigger>
             <TabsTrigger value="occupancy">Occupancy</TabsTrigger>
@@ -40,6 +42,9 @@ export function ReportsPage() {
               initialFrom={params.get("from") ?? undefined}
               initialTo={params.get("to") ?? undefined}
             />
+          </TabsContent>
+          <TabsContent value="budget" className="mt-4">
+            <BudgetTab />
           </TabsContent>
           <TabsContent value="maintenance" className="mt-4">
             <MaintenanceTab />

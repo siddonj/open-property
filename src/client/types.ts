@@ -411,6 +411,23 @@ export interface ProfitLossReport {
   accounts: ProfitLossAccount[];
 }
 
+export interface BudgetReportLine {
+  account_id: number;
+  code: string;
+  name: string;
+  group: AccountGroup | "income";
+  budget_cents: number | null;
+  actual_cents: number;
+  /** Positive is favorable: under budget for costs, over budget for income. Null when unbudgeted. */
+  variance_cents: number | null;
+}
+
+export interface BudgetReport {
+  property_id: number;
+  year: number;
+  lines: BudgetReportLine[];
+}
+
 export interface MaintenanceReport {
   from: string;
   to: string;

@@ -27,6 +27,7 @@ import type {
   NewVendor,
   IncomeReport,
   ProfitLossReport,
+  BudgetReport,
   MaintenanceReport,
   DelinquencyRow,
   OccupancyReport,
@@ -406,6 +407,14 @@ export function useAppState() {
     return api<ProfitLossReport>("GET", `/api/reports/profit-loss?${qs.toString()}`);
   }, []);
 
+  const getBudgetReport = useCallback(async (propertyId: number, year: number): Promise<BudgetReport> => {
+    return api<BudgetReport>("GET", `/api/reports/budget?property_id=${propertyId}&year=${year}`);
+  }, []);
+
+  const saveBudget = useCallback(async (data: { property_id: number; year: number; lines: { account_id: number; amount_cents: number | null }[] }) => {
+    await api("PUT", "/api/budgets", data);
+  }, []);
+
   const getMaintenanceReport = useCallback(async (params?: { from?: string; to?: string; property_id?: number; vendor_id?: number }): Promise<MaintenanceReport> => {
     const qs = new URLSearchParams();
     if (params?.from) qs.set("from", params.from);
@@ -458,7 +467,7 @@ export function useAppState() {
     // applications
     listApplications, createApplication, updateApplication, deleteApplication,
     // reports
-    getIncomeReport, getProfitLossReport, getMaintenanceReport, getDelinquencyReport, getOccupancyReport,
+    getIncomeReport, getProfitLossReport, getBudgetReport, saveBudget, getMaintenanceReport, getDelinquencyReport, getOccupancyReport,
   };
 }
 

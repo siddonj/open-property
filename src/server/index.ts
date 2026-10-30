@@ -1817,6 +1817,83 @@ app.get("/api/reports/occupancy", async (c) => {
   return c.json({ from: range.from, to: range.to, months });
 });
 
+// ── Budgets ────────────────────────────────────────────────────────
+// One annual amount per property, year, and account, in cents (D4). The budget report
+// returns every account's budget alongside its actuals, so there is no separate GET.
+
+const BudgetInput = z.object({
+  property_id: z.number().int(),
+  year: z.number().int().min(1900).max(2999),
+  lines: z.array(z.object({
+    account_id: z.number().int(),
+    amount_cents: z.number().int().min(0).max(100_000_000_000).nullable(),
+  })).min(1).max(100),
+});
+
+// Upsert each line; a null amount removes it. Lines are independent, so a partial failure
+// leaves the earlier lines saved and the operator can re-save.
+app.put("/api/budgets", async (c) => {
+  const parsed = await parseJson(c, BudgetInput);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const d = parsed.data;
+  if (!await get("SELECT 1 FROM properties WHERE id = ?", [d.property_id])) return c.json({ error: "Property not found" }, 400);
+  const accounts = new Set((await query<{ id: number }>("SELECT id FROM gl_accounts WHERE active = 1")).map((a) => a.id));
+  if (d.lines.some((l) => !accounts.has(l.account_id))) return c.json({ error: "Unknown account" }, 400);
+  for (const l of d.lines) {
+    if (l.amount_cents === null) {
+      await run("DELETE FROM budgets WHERE property_id = ? AND year = ? AND account_id = ?", [d.property_id, d.year, l.account_id]);
+    } else {
+      await run(
+        `INSERT INTO budgets (property_id, year, account_id, amount_cents) VALUES (?, ?, ?, ?)
+         ON CONFLICT (property_id, year, account_id) DO UPDATE SET amount_cents = excluded.amount_cents`,
+        [d.property_id, d.year, l.account_id, l.amount_cents],
+      );
+    }
+  }
+  return c.json({ ok: true });
+});
+
+// Actuals follow the P&L: rent revenue (5120) is rent collected by charge period;
+// expense and capital accounts are complete bill lines by bill date, paid or not.
+// Variance is signed so positive is favorable: under budget for costs, over budget for income.
+app.get("/api/reports/budget", async (c) => {
+  const propertyId = intParam(c.req.query("property_id"));
+  const year = intParam(c.req.query("year"));
+  if (!propertyId) return c.json({ error: "property_id is required" }, 400);
+  if (!year || year < 1900 || year > 2999) return c.json({ error: "year must be 1900–2999" }, 400);
+  const from = `${year}-01`;
+  const to = `${year}-12`;
+  const accounts = await query<{ id: number; code: string; name: string; type: string; is_operating: number }>(
+    "SELECT id, code, name, type, is_operating FROM gl_accounts WHERE active = 1 ORDER BY code",
+  );
+  const budgets = await query<{ account_id: number; amount_cents: number }>(
+    "SELECT account_id, amount_cents FROM budgets WHERE property_id = ? AND year = ?",
+    [propertyId, year],
+  );
+  const lines = await billLineActuals(from, to, propertyId);
+  const scope = rentScope(propertyId);
+  const rent = await get<{ collected_cents: number | null }>(
+    `SELECT SUM(CAST(ROUND(rc.amount_paid * 100) AS INTEGER)) AS collected_cents
+     FROM rent_charges rc${scope.join}
+     WHERE rc.period >= ? AND rc.period <= ?${scope.where}`,
+    [from, to, ...scope.params],
+  );
+  const rows = accounts.map((a) => {
+    const budget = budgets.find((b) => b.account_id === a.id)?.amount_cents ?? null;
+    const actual = a.code === "5120"
+      ? rent?.collected_cents ?? 0
+      : lines.filter((l) => l.account_id === a.id).reduce((s, l) => s + l.amount_cents, 0);
+    const group = a.type === "income" ? "income" : accountGroup(a);
+    return {
+      account_id: a.id, code: a.code, name: a.name, group,
+      budget_cents: budget,
+      actual_cents: actual,
+      variance_cents: budget === null ? null : group === "income" ? actual - budget : budget - actual,
+    };
+  });
+  return c.json({ property_id: propertyId, year, lines: rows });
+});
+
 // ── Health ─────────────────────────────────────────────────────────
 
 app.get("/api/health", (c) => c.json({ ok: true }));
