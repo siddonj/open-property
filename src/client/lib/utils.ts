@@ -77,7 +77,12 @@ export function downloadCsv<T>(
   rows: T[],
   columns: { key: keyof T; label: string }[],
 ): void {
-  const escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const escape = (v: unknown) => {
+    let s = String(v ?? "");
+    // Neutralize spreadsheet formulas in text cells (CSV injection); numbers stay numeric.
+    if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    return `"${s.replace(/"/g, '""')}"`;
+  };
   const header = columns.map((c) => escape(c.label)).join(",");
   const body = rows.map((r) => columns.map((c) => escape(r[c.key])).join(",")).join("\n");
   const blob = new Blob([header + "\n" + body], { type: "text/csv;charset=utf-8;" });

@@ -1040,13 +1040,21 @@ app.put("/api/settings", async (c) => {
 
 // ── Reports ────────────────────────────────────────────────────────
 
-const PERIOD_RE = /^\d{4}-\d{2}$/;
+const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+// Upper bound on report ranges; the occupancy report runs one query per month.
+const MAX_REPORT_MONTHS = 36;
+
+const monthIndex = (period: string) => {
+  const [y, m] = period.split("-").map(Number);
+  return y * 12 + m;
+};
 
 function periodRange(c: Context): { from: string; to: string } | null {
   const now = new Date().toISOString().slice(0, 7);
   const to = c.req.query("to") || now;
   const from = c.req.query("from") || addMonthsSql(to, -11);
   if (!PERIOD_RE.test(from) || !PERIOD_RE.test(to)) return null;
+  if (monthIndex(to) - monthIndex(from) >= MAX_REPORT_MONTHS) return null;
   return { from, to };
 }
 
@@ -1058,7 +1066,7 @@ function addMonthsSql(period: string, delta: number): string {
 
 app.get("/api/reports/income", async (c) => {
   const range = periodRange(c);
-  if (!range) return c.json({ error: "from/to must be 'YYYY-MM'" }, 400);
+  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' and span at most 36 months" }, 400);
   const rows = await query(
     `SELECT period,
        SUM(amount) as charged,
@@ -1075,7 +1083,7 @@ app.get("/api/reports/income", async (c) => {
 
 app.get("/api/reports/maintenance", async (c) => {
   const range = periodRange(c);
-  if (!range) return c.json({ error: "from/to must be 'YYYY-MM'" }, 400);
+  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' and span at most 36 months" }, 400);
   const propertyId = intParam(c.req.query("property_id"));
   const vendorId = intParam(c.req.query("vendor_id"));
   const where: string[] = ["w.status = 'completed'", "w.completed_at IS NOT NULL", "strftime('%Y-%m', w.completed_at) >= ?", "strftime('%Y-%m', w.completed_at) <= ?"];
@@ -1116,7 +1124,7 @@ app.get("/api/reports/delinquency", async (c) => {
 
 app.get("/api/reports/occupancy", async (c) => {
   const range = periodRange(c);
-  if (!range) return c.json({ error: "from/to must be 'YYYY-MM'" }, 400);
+  if (!range) return c.json({ error: "from/to must be 'YYYY-MM' and span at most 36 months" }, 400);
   const totalRow = await get<{ n: number }>("SELECT COUNT(*) as n FROM units");
   const totalUnits = totalRow?.n ?? 0;
   const months: { period: string; occupied_units: number; total_units: number; occupancy_rate: number }[] = [];
