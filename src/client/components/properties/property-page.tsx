@@ -6,6 +6,7 @@ import { cn, colorClasses, daysBetween, formatDate, formatMoney, toIsoDate } fro
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { FinancialsCard } from "./financials-card";
 import { PropertyDialog } from "./property-dialog";
 import { UnitDialog } from "./unit-dialog";
 import { WorkOrderDialog } from "../maintenance/work-order-dialog";
@@ -135,6 +136,8 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
           <SummaryCard label="Market rent" value={formatMoney(totalRent, app.settings.currency)} />
           <SummaryCard label="Open work orders" value={String(openWorkOrders.length)} tone={openWorkOrders.length > 0 ? "warn" : "default"} />
         </section>
+
+        <FinancialsCard propertyId={property.id} navigate={navigate} />
 
         <section>
           <div className="mb-3 flex items-center justify-between">

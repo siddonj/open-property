@@ -39,7 +39,7 @@ export function useRouter() {
   const navigate = useCallback((to: string) => {
     if (to === window.location.pathname) return;
     window.history.pushState(null, "", to);
-    setPath(to);
+    setPath(window.location.pathname); // `to` may carry a query string; routes match the path only
   }, []);
 
   useEffect(() => {
