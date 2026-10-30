@@ -643,6 +643,23 @@ const PaymentInput = z.object({
   notes: z.string().optional().nullable(),
 });
 
+// Recompute a charge's amount_paid and status from its payments. An unpaid balance past
+// its due date stays 'overdue', matching how /api/rent-charges/generate marks charges.
+async function recomputeCharge(chargeId: number) {
+  const paid = "(SELECT COALESCE(SUM(amount), 0) FROM payments WHERE charge_id = rent_charges.id)";
+  await run(
+    `UPDATE rent_charges SET
+       amount_paid = ${paid},
+       status = CASE
+         WHEN ${paid} >= amount THEN 'paid'
+         WHEN due_date < date('now') THEN 'overdue'
+         WHEN ${paid} > 0 THEN 'partial'
+         ELSE 'open' END
+     WHERE id = ?`,
+    [chargeId],
+  );
+}
+
 app.get("/api/rent-charges/:id/payments", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
@@ -654,18 +671,14 @@ app.post("/api/payments", async (c) => {
   const parsed = await parseJson(c, PaymentInput);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const d = parsed.data;
+  const charge = await get("SELECT id FROM rent_charges WHERE id = ?", [d.charge_id]);
+  if (!charge) return c.json({ error: "Charge not found" }, 404);
   await run(
     `INSERT INTO payments (charge_id, paid_at, amount, method, reference, notes)
      VALUES (?, COALESCE(?, datetime('now')), ?, ?, ?, ?)`,
     [d.charge_id, d.paid_at ?? null, d.amount, d.method ?? "cash", d.reference ?? null, d.notes ?? null],
   );
-  // Recompute the charge's amount_paid + status.
-  const charge = await get<{ amount: number }>("SELECT amount FROM rent_charges WHERE id = ?", [d.charge_id]);
-  if (!charge) return c.json({ error: "Charge not found" }, 404);
-  const sumRow = await get<{ total: number }>("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE charge_id = ?", [d.charge_id]);
-  const paid = Number(sumRow?.total ?? 0);
-  const status = paid >= charge.amount ? "paid" : paid > 0 ? "partial" : "open";
-  await run("UPDATE rent_charges SET amount_paid = ?, status = ? WHERE id = ?", [paid, status, d.charge_id]);
+  await recomputeCharge(d.charge_id);
   const updated = await get(`${CHARGE_SELECT} WHERE c.id = ?`, [d.charge_id]);
   return c.json({ charge: updated }, 201);
 });
@@ -676,12 +689,7 @@ app.delete("/api/payments/:id", async (c) => {
   const row = await get<{ charge_id: number }>("SELECT charge_id FROM payments WHERE id = ?", [id]);
   if (!row) return c.json({ error: "Not found" }, 404);
   await run("DELETE FROM payments WHERE id = ?", [id]);
-  // Recompute the charge.
-  const sumRow = await get<{ total: number }>("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE charge_id = ?", [row.charge_id]);
-  const charge = await get<{ amount: number }>("SELECT amount FROM rent_charges WHERE id = ?", [row.charge_id]);
-  const paid = Number(sumRow?.total ?? 0);
-  const status = !charge ? "open" : paid >= charge.amount ? "paid" : paid > 0 ? "partial" : "open";
-  await run("UPDATE rent_charges SET amount_paid = ?, status = ? WHERE id = ?", [paid, status, row.charge_id]);
+  await recomputeCharge(row.charge_id);
   return c.json({ ok: true });
 });
 
