@@ -14,7 +14,11 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   lease?: Lease;
-  defaults?: { unit_id?: number; primary_tenant_id?: number };
+  /** Prefill values for create mode (e.g. renewing an existing lease). */
+  defaults?: Partial<Pick<Lease,
+    "unit_id" | "primary_tenant_id" | "start_date" | "end_date" | "monthly_rent" |
+    "deposit" | "rent_due_day" | "late_fee" | "status"
+  >>;
   onSaved?: () => void;
 }
 
@@ -59,16 +63,17 @@ export function LeaseDialog({ open, onOpenChange, lease, defaults, onSaved }: Pr
     if (!open) return;
     setUnitId(lease?.unit_id ?? defaults?.unit_id ?? "");
     setTenantId(lease?.primary_tenant_id ?? defaults?.primary_tenant_id ?? "");
+    const src = lease ?? defaults;
     const today = toIsoDate(new Date());
     const oneYear = new Date();
     oneYear.setFullYear(oneYear.getFullYear() + 1);
-    setStart(lease?.start_date ?? today);
-    setEnd(lease?.end_date ?? toIsoDate(oneYear));
-    setRent(String(lease?.monthly_rent ?? 0));
-    setDeposit(String(lease?.deposit ?? 0));
-    setDueDay(String(lease?.rent_due_day ?? app.settings.default_rent_due_day));
-    setLateFee(String(lease?.late_fee ?? app.settings.late_fee_amount));
-    setStatus(lease?.status ?? "active");
+    setStart(src?.start_date ?? today);
+    setEnd(src?.end_date ?? toIsoDate(oneYear));
+    setRent(String(src?.monthly_rent ?? 0));
+    setDeposit(String(src?.deposit ?? 0));
+    setDueDay(String(src?.rent_due_day ?? app.settings.default_rent_due_day));
+    setLateFee(String(src?.late_fee ?? app.settings.late_fee_amount));
+    setStatus(src?.status ?? "active");
     setNotes(lease?.notes ?? "");
   }, [open, lease, defaults, app.settings]);
 

@@ -11,10 +11,12 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   tenant?: Tenant;
+  /** Prefill values for create mode (e.g. from an approved application). */
+  defaults?: Partial<Tenant>;
   onSaved?: (t: Tenant) => void;
 }
 
-export function TenantDialog({ open, onOpenChange, tenant, onSaved }: Props) {
+export function TenantDialog({ open, onOpenChange, tenant, defaults, onSaved }: Props) {
   const app = useApp();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -29,16 +31,17 @@ export function TenantDialog({ open, onOpenChange, tenant, onSaved }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    setFirstName(tenant?.first_name ?? "");
-    setLastName(tenant?.last_name ?? "");
-    setEmail(tenant?.email ?? "");
-    setPhone(tenant?.phone ?? "");
-    setDob(tenant?.date_of_birth ?? "");
-    setEmployer(tenant?.employer ?? "");
-    setIncome(tenant?.monthly_income ? String(tenant.monthly_income) : "");
-    setEmergency(tenant?.emergency_contact ?? "");
-    setNotes(tenant?.notes ?? "");
-  }, [open, tenant]);
+    const src = tenant ?? defaults;
+    setFirstName(src?.first_name ?? "");
+    setLastName(src?.last_name ?? "");
+    setEmail(src?.email ?? "");
+    setPhone(src?.phone ?? "");
+    setDob(src?.date_of_birth ?? "");
+    setEmployer(src?.employer ?? "");
+    setIncome(src?.monthly_income ? String(src.monthly_income) : "");
+    setEmergency(src?.emergency_contact ?? "");
+    setNotes(src?.notes ?? "");
+  }, [open, tenant, defaults]);
 
   async function save() {
     if (!firstName.trim() || !lastName.trim()) return;

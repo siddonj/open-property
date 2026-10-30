@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Receipt,
   BarChart3,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Route } from "@/hooks/use-router";
@@ -25,6 +26,7 @@ const sections: { heading: string; items: NavItem[] }[] = [
       { label: "Dashboard",   icon: LayoutDashboard, path: "/dashboard",  match: (r) => r.name === "dashboard" },
       { label: "Properties",  icon: Building2,       path: "/properties", match: (r) => r.name === "properties" || r.name === "property" },
       { label: "Tenants",     icon: Users,           path: "/tenants",    match: (r) => r.name === "tenants" || r.name === "tenant" },
+      { label: "Applications", icon: FileText,       path: "/applications", match: (r) => r.name === "applications" },
       { label: "Leases",      icon: ClipboardList,   path: "/leases",     match: (r) => r.name === "leases" },
     ],
   },

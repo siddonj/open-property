@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm db:migrate && concurrently -n ui,api -c cyan,green \"vite\" \"wrangler dev --port 8787\"",
-    "db:migrate": "wrangler d1 execute open-property-db --local --file=src/server/schema.sql",
+    "db:migrate": "wrangler d1 execute open-property-db --local --file=src/server/schema.sql && wrangler d1 migrations apply open-property-db --local",
     "build": "vite build",
     "typecheck": "tsc --noEmit"
   },

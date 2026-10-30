@@ -7,14 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 pnpm install
 pnpm dev          # applies D1 schema, then runs Vite (:5173) + Wrangler (:8787) concurrently
-pnpm db:migrate   # re-apply src/server/schema.sql to the local D1 database
+pnpm db:migrate   # apply src/server/schema.sql (baseline) + pending migrations/ to the local D1 database
 pnpm typecheck    # tsc --noEmit
 pnpm build        # vite build -> dist/
 ```
 
 There is no test suite and no lint script configured in `package.json`. `pnpm typecheck` is the only automated check — run it after any change.
 
-To reset local data, re-run `pnpm db:migrate` (schema.sql re-seeds sample properties/units/vendors).
+`db:migrate` is idempotent and does not reset data (`CREATE TABLE IF NOT EXISTS`, guarded seeds, tracked migrations). To reset local data, delete `.wrangler/state` and re-run `pnpm db:migrate`.
 
 ## AI-assisted SDLC
 
@@ -29,13 +29,14 @@ To reset local data, re-run `pnpm db:migrate` (schema.sql re-seeds sample proper
 
 Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLite) database. In dev, Vite proxies `/api/*` to Wrangler on :8787 (see `vite.config.ts`); in production both are served by the same Worker.
 
-- `src/server/index.ts` — every API route lives in this one Hono file (~870 lines), organized in commented sections per entity (Properties, Units, Tenants, Leases, Rent, Maintenance, Vendors, Settings). New endpoints should follow the existing section, not create new files, unless the file grows unreasonably.
+- `src/server/index.ts` — every API route lives in this one Hono file (~1,100 lines), organized in commented sections per entity (Properties, Units, Tenants, Leases, Lease checklists, Rent, Maintenance, Vendors, Applications, Dashboard, Settings, Reports). New endpoints should follow the existing section, not create new files, unless the file grows unreasonably.
 - `src/server/db.ts` — re-exports `initDB`/`query`/`get`/`run` from `@clawnify/db`, the D1 adapter package. All DB access goes through these three functions; there is no ORM.
-- `src/server/schema.sql` — full schema + seed data (3 properties, 5 units, 3 vendors). Applied fresh on every `pnpm dev` via `db:migrate`.
+- `src/server/schema.sql` — baseline schema + seed data (3 properties, 5 units, 3 vendors). Applied on every `pnpm dev` via `db:migrate`. Don't add columns here: `CREATE TABLE IF NOT EXISTS` can't alter existing databases.
+- `migrations/NNNN_<name>.sql` — schema changes after the baseline, applied once each by `wrangler d1 migrations apply` (tracked in `d1_migrations`). Remote databases need `wrangler d1 migrations apply open-property-db --remote`.
 - `src/client/app.tsx` — shell: renders `Sidebar` + the active page based on `route.name`, wrapped in `AppContext.Provider`.
 - `src/client/hooks/use-router.ts` — hand-rolled pushState router. Routes are a discriminated union (`Route` type); add new routes here (both the `parse()` regex and the `Route` union member) and wire the page in `app.tsx`.
 - `src/client/hooks/use-app-state.ts` — central data-fetching hook; owns loading/error state consumed via `AppContext`.
-- `src/client/components/<domain>/` — one directory per feature (dashboard, properties, tenants, leases, rent, maintenance, settings), each with list/detail/dialog components colocated.
+- `src/client/components/<domain>/` — one directory per feature (dashboard, properties, tenants, applications, leases, rent, maintenance, reports, settings), each with list/detail/dialog components colocated.
 - `src/client/components/ui/` — vendored shadcn/ui primitives (Radix-based). Treat as generated; prefer composing over editing unless fixing a real bug.
 - `src/client/lib/utils.ts` — `cn()` class helper plus shared color/date/money/period formatting helpers used across components.
 

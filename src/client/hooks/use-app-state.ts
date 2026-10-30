@@ -8,6 +8,10 @@ import type {
   RentCharge,
   Vendor,
   WorkOrder,
+  Application,
+  NewApplication,
+  ChecklistKind,
+  LeaseChecklist,
   NewProperty,
   NewUnit,
   NewTenant,
@@ -25,6 +29,7 @@ export interface AppSettings {
   late_fee_amount: number;
   late_fee_grace_days: number;
   currency: string;
+  renewal_notice_days: number;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -32,6 +37,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   late_fee_amount: 50,
   late_fee_grace_days: 5,
   currency: "USD",
+  renewal_notice_days: 60,
 };
 
 function parseSettings(raw: Record<string, string>): AppSettings {
@@ -44,6 +50,7 @@ function parseSettings(raw: Record<string, string>): AppSettings {
     late_fee_amount: num("late_fee_amount", DEFAULT_SETTINGS.late_fee_amount),
     late_fee_grace_days: num("late_fee_grace_days", DEFAULT_SETTINGS.late_fee_grace_days),
     currency: raw.currency || DEFAULT_SETTINGS.currency,
+    renewal_notice_days: num("renewal_notice_days", DEFAULT_SETTINGS.renewal_notice_days),
   };
 }
 
@@ -254,6 +261,55 @@ export function useAppState() {
     await api("DELETE", `/api/work-orders/${id}`);
   }, []);
 
+  // Lease checklists ─────────────────────────────────────────────
+
+  const listChecklists = useCallback(async (leaseId: number): Promise<LeaseChecklist[]> => {
+    const data = await api<{ checklists: LeaseChecklist[] }>("GET", `/api/leases/${leaseId}/checklists`);
+    return data.checklists;
+  }, []);
+
+  const createChecklist = useCallback(async (leaseId: number, kind: ChecklistKind): Promise<LeaseChecklist[]> => {
+    const data = await api<{ checklists: LeaseChecklist[] }>("POST", `/api/leases/${leaseId}/checklists`, { kind });
+    return data.checklists;
+  }, []);
+
+  const addChecklistItem = useCallback(async (checklistId: number, label: string) => {
+    await api("POST", `/api/checklists/${checklistId}/items`, { label });
+  }, []);
+
+  const updateChecklistItem = useCallback(async (itemId: number, patch: { label?: string; done?: boolean }) => {
+    await api("PUT", `/api/checklist-items/${itemId}`, patch);
+  }, []);
+
+  const deleteChecklistItem = useCallback(async (itemId: number) => {
+    await api("DELETE", `/api/checklist-items/${itemId}`);
+  }, []);
+
+  // Applications ─────────────────────────────────────────────────
+
+  const listApplications = useCallback(async (params?: { status?: string; q?: string }): Promise<Application[]> => {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set("status", params.status);
+    if (params?.q) qs.set("q", params.q);
+    const path = qs.toString() ? `/api/applications?${qs.toString()}` : "/api/applications";
+    const data = await api<{ applications: Application[] }>("GET", path);
+    return data.applications;
+  }, []);
+
+  const createApplication = useCallback(async (data: NewApplication) => {
+    const res = await api<{ application: Application }>("POST", "/api/applications", data);
+    return res.application;
+  }, []);
+
+  const updateApplication = useCallback(async (id: number, patch: Partial<NewApplication>) => {
+    const res = await api<{ application: Application }>("PUT", `/api/applications/${id}`, patch);
+    return res.application;
+  }, []);
+
+  const deleteApplication = useCallback(async (id: number) => {
+    await api("DELETE", `/api/applications/${id}`);
+  }, []);
+
   // Reports ──────────────────────────────────────────────────────
 
   const getIncomeReport = useCallback(async (params?: { from?: string; to?: string }): Promise<IncomeReport> => {
@@ -307,6 +363,10 @@ export function useAppState() {
     createVendor, updateVendor, deleteVendor,
     // work orders
     listWorkOrders, createWorkOrder, updateWorkOrder, deleteWorkOrder,
+    // lease checklists
+    listChecklists, createChecklist, addChecklistItem, updateChecklistItem, deleteChecklistItem,
+    // applications
+    listApplications, createApplication, updateApplication, deleteApplication,
     // reports
     getIncomeReport, getMaintenanceReport, getDelinquencyReport, getOccupancyReport,
   };

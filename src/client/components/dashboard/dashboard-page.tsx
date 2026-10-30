@@ -25,7 +25,7 @@ export function DashboardPage({ navigate }: { navigate: (to: string) => void }) 
     (async () => {
       try {
         setLoading(true);
-        const data = await api<DashboardSummary>("GET", "/api/dashboard/summary");
+        const data = await api<DashboardSummary>("GET", `/api/dashboard/summary?today=${toIsoDate(new Date())}`);
         if (!cancelled) setSummary(data);
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
@@ -181,32 +181,87 @@ export function DashboardPage({ navigate }: { navigate: (to: string) => void }) 
                 View all
               </button>
             </div>
-            {summary.upcoming_expirations.length === 0 ? (
-              <Empty icon={<CheckCircle2 className="h-5 w-5" />} title="Nothing in the next 60 days" message="No lease expirations coming up." />
+            {summary.upcoming_expirations.length === 0 && summary.expired_leases.length === 0 ? (
+              <Empty
+                icon={<CheckCircle2 className="h-5 w-5" />}
+                title={`Nothing in the next ${summary.renewal_notice_days} days`}
+                message="No lease expirations coming up."
+              />
             ) : (
               <ul className="divide-y">
-                {summary.upcoming_expirations.map((l) => {
-                  const today = toIsoDate(new Date());
-                  const days = daysBetween(today, l.end_date);
+                {[...summary.expired_leases, ...summary.upcoming_expirations].map((l) => {
+                  const days = daysBetween(toIsoDate(new Date()), l.end_date);
                   return (
-                    <li key={l.id} className="flex items-center justify-between gap-4 py-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">
-                          {l.tenant_first_name || "—"} {l.tenant_last_name || ""}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {[l.property_name, l.unit_name].filter(Boolean).join(" · ")}
-                        </p>
-                      </div>
-                      <div className="text-right text-xs">
-                        <div className="font-medium text-foreground">{formatDate(l.end_date)}</div>
-                        <div className={cn(
-                          "text-muted-foreground",
-                          days <= 14 && "text-rose-600 font-medium",
-                        )}>
-                          {days < 0 ? "Already ended" : days === 0 ? "Today" : `in ${days} day${days === 1 ? "" : "s"}`}
+                    <li key={l.id}>
+                      <button
+                        type="button"
+                        onClick={() => navigate("/leases")}
+                        className="flex w-full items-center justify-between gap-4 py-3 text-left hover:bg-muted/40"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">
+                            {l.tenant_first_name || "—"} {l.tenant_last_name || ""}
+                          </p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {[l.property_name, l.unit_name].filter(Boolean).join(" · ")}
+                          </p>
                         </div>
-                      </div>
+                        <div className="text-right text-xs">
+                          <div className="font-medium text-foreground">{formatDate(l.end_date)}</div>
+                          <div className={cn(
+                            "text-muted-foreground",
+                            days <= 14 && "text-rose-600 font-medium",
+                          )}>
+                            {days < 0 ? "Expired · still active" : days === 0 ? "Ends today" : `Expiring in ${days} day${days === 1 ? "" : "s"}`}
+                          </div>
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Card>
+
+          <Card className="p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">
+                Application follow-ups due
+                {summary.followups_due_count > 0 && (
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">{summary.followups_due_count}</span>
+                )}
+              </h2>
+              <button
+                type="button"
+                onClick={() => navigate("/applications")}
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                View all
+              </button>
+            </div>
+            {summary.followups_due.length === 0 ? (
+              <Empty icon={<CheckCircle2 className="h-5 w-5" />} title="No follow-ups due" message="Active applications are on schedule." />
+            ) : (
+              <ul className="divide-y">
+                {summary.followups_due.map((a) => {
+                  const overdue = a.follow_up_date < toIsoDate(new Date());
+                  return (
+                    <li key={a.id}>
+                      <button
+                        type="button"
+                        onClick={() => navigate("/applications")}
+                        className="flex w-full items-center justify-between gap-4 py-3 text-left hover:bg-muted/40"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">{a.first_name} {a.last_name}</p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {[a.property_name, a.unit_name].filter(Boolean).join(" · ") || "No unit"} · <span className="capitalize">{a.status}</span>
+                          </p>
+                        </div>
+                        <div className={cn("text-right text-xs", overdue ? "font-medium text-rose-600" : "text-amber-700")}>
+                          {overdue ? `Overdue · ${formatDate(a.follow_up_date)}` : "Due today"}
+                        </div>
+                      </button>
                     </li>
                   );
                 })}

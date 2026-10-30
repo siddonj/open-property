@@ -15,7 +15,8 @@ Rental property management with everything you need to run a portfolio: properti
 ### Dashboard
 - **At-a-glance KPIs** — occupancy rate, active leases, outstanding rent, open work orders
 - **This month's rent** — collected, outstanding, overdue at a glance
-- **Open work orders** + **upcoming lease expirations** — what to act on this week
+- **Open work orders** + **lease expirations** — expired-but-still-active leases and those inside the renewal window
+- **Application follow-ups due** — active applications whose follow-up date has arrived
 
 ### Properties & units
 - Property cards with type, address, color tag, occupancy snapshot
@@ -26,10 +27,18 @@ Rental property management with everything you need to run a portfolio: properti
 - Searchable list showing each tenant's active unit and contact info
 - Detail page with active lease, contact, employer, income, emergency contact, lease history
 
+### Applications
+- Leasing pipeline for manually recorded applications, linked to a property · unit
+- Filters for active / new / screening / approved / declined / withdrawn / all, plus search by name, email, or phone
+- Guided status changes (start screening, approve, decline, withdraw, reopen) and a follow-up date
+- **Create tenant** from an approved application (prefills the tenant form; no lease is created automatically)
+
 ### Leases
 - One row per lease with tenant, property · unit, term, monthly rent, and status
-- Filters for active / upcoming / ended / all
+- Filters for active / expiring / upcoming / ended / all — "expiring" covers the configurable renewal window plus leases past their end date that are still active
 - Edit-in-dialog with start / end / rent / deposit / due day / late fee / status
+- **Renew** opens a new lease prefilled from the current one (starting the day after it ends); the original lease is left unchanged
+- Move-in and move-out **checklists** per lease, seeded with default items and editable, with progress shown on the list
 
 ### Rent ledger
 - One charge per active lease per month, generated idempotently with one click
@@ -45,6 +54,7 @@ Rental property management with everything you need to run a portfolio: properti
 ### Vendors & policy
 - Vendor directory by category (plumber / electrician / HVAC / handyman / cleaning / landscaping / general)
 - Rent policy defaults: due day, late fee, grace days, currency
+- Lease renewal window (days before end date that a lease is flagged)
 
 ## Stack
 
@@ -63,7 +73,9 @@ pnpm typecheck
 pnpm build
 ```
 
-The dev script applies `src/server/schema.sql` to the local D1 database, then runs Vite and Wrangler in parallel. The schema seeds 3 sample properties, 5 units, and 3 vendors so the app is usable on first boot.
+The dev script applies `src/server/schema.sql` (the baseline schema) and then any pending migrations in `migrations/` to the local D1 database, then runs Vite and Wrangler in parallel. The schema seeds 3 sample properties, 5 units, and 3 vendors so the app is usable on first boot.
+
+Schema changes after the baseline go in a new numbered file in `migrations/` (applied once and tracked by Wrangler in `d1_migrations`), not in `schema.sql`.
 
 For the repository's Claude Code AI-native SDLC workflow and change templates, see [docs/sdlc/README.md](docs/sdlc/README.md).
 
@@ -77,6 +89,13 @@ clawnify deploy
 
 Or wire it up to Cloudflare Workers + D1 directly using the bindings in `wrangler.toml` (binding `DB`, database name `open-property-db`).
 
+After deploying, apply the baseline schema and migrations to the remote database:
+
+```bash
+wrangler d1 execute open-property-db --remote --file=src/server/schema.sql
+wrangler d1 migrations apply open-property-db --remote
+```
+
 ## Project layout
 
 ```
@@ -84,14 +103,16 @@ src/
   server/
     index.ts        Hono routes for every entity
     db.ts           D1 adapter (query / get / run)
-    schema.sql      Tables + seed data
+    schema.sql      Baseline tables + seed data
+migrations/         Numbered schema changes applied after the baseline
   client/
     app.tsx         Shell + routing
     components/
       dashboard/    Portfolio + month-at-a-glance
       properties/   List, property detail, property + unit dialogs
       tenants/      List, tenant detail, tenant dialog
-      leases/       Leases page + lease dialog
+      applications/ Applications pipeline + application dialog
+      leases/       Leases page, lease dialog, move-in/out checklist dialog
       rent/         Rent ledger + payment dialog
       maintenance/  Work orders board + work-order dialog
       settings/     Vendors + rent policy defaults

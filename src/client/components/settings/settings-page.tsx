@@ -245,6 +245,7 @@ function PolicyTab() {
   const [lateFee, setLateFee] = useState(String(app.settings.late_fee_amount));
   const [grace, setGrace] = useState(String(app.settings.late_fee_grace_days));
   const [currency, setCurrency] = useState(app.settings.currency);
+  const [renewalDays, setRenewalDays] = useState(String(app.settings.renewal_notice_days));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -252,6 +253,7 @@ function PolicyTab() {
     setLateFee(String(app.settings.late_fee_amount));
     setGrace(String(app.settings.late_fee_grace_days));
     setCurrency(app.settings.currency);
+    setRenewalDays(String(app.settings.renewal_notice_days));
   }, [app.settings]);
 
   async function save() {
@@ -262,6 +264,7 @@ function PolicyTab() {
         late_fee_amount: parseFloat(lateFee) || 0,
         late_fee_grace_days: Math.max(0, parseInt(grace, 10) || 0),
         currency: currency.trim().toUpperCase() || "USD",
+        renewal_notice_days: Math.min(365, Math.max(1, parseInt(renewalDays, 10) || 60)),
       });
     } catch (err) {
       app.setError((err as Error).message);
@@ -292,6 +295,16 @@ function PolicyTab() {
         <div>
           <Label htmlFor="s-cur">Currency</Label>
           <Input id="s-cur" value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="USD" />
+        </div>
+      </div>
+      <h2 className="mb-1 mt-6 text-sm font-semibold">Lease renewals</h2>
+      <p className="mb-4 text-xs text-muted-foreground">
+        Active leases ending within this many days are flagged on the dashboard and leases page.
+      </p>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div>
+          <Label htmlFor="s-renewal">Renewal window (days)</Label>
+          <Input id="s-renewal" type="number" min={1} max={365} value={renewalDays} onChange={(e) => setRenewalDays(e.target.value)} />
         </div>
       </div>
       <div className="mt-4">

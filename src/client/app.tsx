@@ -8,6 +8,7 @@ import { PropertiesList } from "./components/properties/properties-list";
 import { PropertyPage } from "./components/properties/property-page";
 import { TenantsList } from "./components/tenants/tenants-list";
 import { TenantPage } from "./components/tenants/tenant-page";
+import { ApplicationsPage } from "./components/applications/applications-page";
 import { LeasesPage } from "./components/leases/leases-page";
 import { RentPage } from "./components/rent/rent-page";
 import { MaintenancePage } from "./components/maintenance/maintenance-page";
@@ -34,6 +35,7 @@ export function App() {
               {route.name === "property" && <PropertyPage id={route.id} navigate={navigate} />}
               {route.name === "tenants" && <TenantsList navigate={navigate} />}
               {route.name === "tenant" && <TenantPage id={route.id} navigate={navigate} />}
+              {route.name === "applications" && <ApplicationsPage navigate={navigate} />}
               {route.name === "leases" && <LeasesPage navigate={navigate} />}
               {route.name === "rent" && <RentPage />}
               {route.name === "maintenance" && <MaintenancePage />}

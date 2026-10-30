@@ -291,12 +291,23 @@ const LeaseInput = z.object({
   notes: z.string().optional().nullable(),
 });
 
+// Done/total item counts for a lease's checklist of the given kind (null total = no checklist).
+function checklistProgress(kind: "move_in" | "move_out"): string {
+  const items = `FROM lease_checklist_items i JOIN lease_checklists cl ON cl.id = i.checklist_id
+      WHERE cl.lease_id = l.id AND cl.kind = '${kind}'`;
+  return `(SELECT SUM(i.done) ${items}) as ${kind}_done,
+    (SELECT CASE WHEN EXISTS (SELECT 1 FROM lease_checklists WHERE lease_id = l.id AND kind = '${kind}')
+      THEN (SELECT COUNT(*) ${items}) END) as ${kind}_total`;
+}
+
 const LEASE_SELECT = `
   SELECT l.*,
     u.name as unit_name,
     p.id as property_id, p.name as property_name, p.color as property_color,
     t.first_name as tenant_first_name, t.last_name as tenant_last_name,
-    t.email as tenant_email, t.phone as tenant_phone
+    t.email as tenant_email, t.phone as tenant_phone,
+    ${checklistProgress("move_in")},
+    ${checklistProgress("move_out")}
   FROM leases l
   LEFT JOIN units u ON u.id = l.unit_id
   LEFT JOIN properties p ON p.id = u.property_id
@@ -360,6 +371,118 @@ app.delete("/api/leases/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
   const r = await run("DELETE FROM leases WHERE id = ?", [id]);
+  if (!r.changes) return c.json({ error: "Not found" }, 404);
+  return c.json({ ok: true });
+});
+
+// ── Lease checklists (move-in / move-out) ──────────────────────────
+
+const ChecklistKind = z.enum(["move_in", "move_out"]);
+
+// Default items seeded into a new checklist; operators can edit per lease.
+const DEFAULT_CHECKLIST_ITEMS: Record<z.infer<typeof ChecklistKind>, string[]> = {
+  move_in: [
+    "Keys handed over",
+    "Meter readings recorded",
+    "Condition photos taken",
+    "Deposit received",
+    "Utilities transferred",
+  ],
+  move_out: [
+    "Keys returned",
+    "Forwarding address recorded",
+    "Final inspection completed",
+    "Meter readings recorded",
+    "Deposit disposition recorded",
+  ],
+};
+
+const ChecklistItemInput = z.object({
+  label: z.string().trim().min(1),
+  done: z.boolean().optional(),
+});
+
+async function checklistsForLease(leaseId: number) {
+  const lists = await query<{ id: number; lease_id: number; kind: string; created_at: string }>(
+    "SELECT * FROM lease_checklists WHERE lease_id = ? ORDER BY kind",
+    [leaseId],
+  );
+  if (!lists.length) return [];
+  const items = await query<{ id: number; checklist_id: number; label: string; done: number; done_at: string | null; sort: number }>(
+    `SELECT * FROM lease_checklist_items
+     WHERE checklist_id IN (${lists.map(() => "?").join(", ")})
+     ORDER BY sort, id`,
+    lists.map((l) => l.id),
+  );
+  return lists.map((l) => ({
+    ...l,
+    items: items.filter((i) => i.checklist_id === l.id).map((i) => ({ ...i, done: !!i.done })),
+  }));
+}
+
+app.get("/api/leases/:id/checklists", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  return c.json({ checklists: await checklistsForLease(id) });
+});
+
+app.post("/api/leases/:id/checklists", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const parsed = await parseJson(c, z.object({ kind: ChecklistKind }));
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const lease = await get("SELECT id FROM leases WHERE id = ?", [id]);
+  if (!lease) return c.json({ error: "Lease not found" }, 404);
+  const existing = await get("SELECT id FROM lease_checklists WHERE lease_id = ? AND kind = ?", [id, parsed.data.kind]);
+  if (existing) return c.json({ error: "Checklist already exists" }, 409);
+  // ON CONFLICT covers a concurrent create racing past the existence check above.
+  const created = await run(
+    "INSERT INTO lease_checklists (lease_id, kind) VALUES (?, ?) ON CONFLICT (lease_id, kind) DO NOTHING",
+    [id, parsed.data.kind],
+  );
+  if (!created.changes) return c.json({ error: "Checklist already exists" }, 409);
+  const labels = DEFAULT_CHECKLIST_ITEMS[parsed.data.kind];
+  await run(
+    `INSERT INTO lease_checklist_items (checklist_id, label, sort) VALUES ${labels.map(() => "(?, ?, ?)").join(", ")}`,
+    labels.flatMap((label, i) => [created.lastInsertRowid, label, i]),
+  );
+  return c.json({ checklists: await checklistsForLease(id) }, 201);
+});
+
+app.post("/api/checklists/:id/items", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const parsed = await parseJson(c, ChecklistItemInput.pick({ label: true }));
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const list = await get<{ id: number }>("SELECT id FROM lease_checklists WHERE id = ?", [id]);
+  if (!list) return c.json({ error: "Not found" }, 404);
+  await run(
+    `INSERT INTO lease_checklist_items (checklist_id, label, sort)
+     VALUES (?, ?, (SELECT COALESCE(MAX(sort), -1) + 1 FROM lease_checklist_items WHERE checklist_id = ?))`,
+    [id, parsed.data.label, id],
+  );
+  return c.json({ ok: true }, 201);
+});
+
+app.put("/api/checklist-items/:id", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const parsed = await parseJson(c, ChecklistItemInput.partial());
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const { label, done } = parsed.data;
+  const { sets, params } = buildUpdate({ label, done: done === undefined ? undefined : done ? 1 : 0 });
+  if (done !== undefined) sets.push(done ? "done_at = datetime('now')" : "done_at = NULL");
+  if (!sets.length) return c.json({ error: "No fields" }, 400);
+  params.push(id);
+  const r = await run(`UPDATE lease_checklist_items SET ${sets.join(", ")} WHERE id = ?`, params);
+  if (!r.changes) return c.json({ error: "Not found" }, 404);
+  return c.json({ ok: true });
+});
+
+app.delete("/api/checklist-items/:id", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const r = await run("DELETE FROM lease_checklist_items WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
   return c.json({ ok: true });
 });
@@ -671,17 +794,30 @@ const ApplicationInput = z.object({
   monthly_income: z.number().optional().nullable(),
   employer: z.string().optional().nullable(),
   desired_move_in: z.string().optional().nullable(),
+  follow_up_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
   status: z.enum(["new", "screening", "approved", "declined", "withdrawn"]).optional(),
   notes: z.string().optional().nullable(),
 });
 
 app.get("/api/applications", async (c) => {
+  const status = c.req.query("status");
+  const search = c.req.query("q")?.trim();
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (status) { where.push("a.status = ?"); params.push(status); }
+  if (search) {
+    const like = `%${search}%`;
+    where.push("(a.first_name LIKE ? OR a.last_name LIKE ? OR a.email LIKE ? OR a.phone LIKE ?)");
+    params.push(like, like, like, like);
+  }
   const rows = await query(
-    `SELECT a.*, u.name as unit_name, p.name as property_name
+    `SELECT a.*, u.name as unit_name, u.property_id as property_id, p.name as property_name
      FROM applications a
      LEFT JOIN units u ON u.id = a.unit_id
      LEFT JOIN properties p ON p.id = u.property_id
+     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
      ORDER BY a.created_at DESC`,
+    params,
   ).catch(() => []);
   return c.json({ applications: rows });
 });
@@ -691,16 +827,16 @@ app.post("/api/applications", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const d = parsed.data;
   const result = await run(
-    `INSERT INTO applications (unit_id, first_name, last_name, email, phone, monthly_income, employer, desired_move_in, status, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO applications (unit_id, first_name, last_name, email, phone, monthly_income, employer, desired_move_in, follow_up_date, status, notes, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
     [
       d.unit_id ?? null, d.first_name, d.last_name,
       d.email ?? null, d.phone ?? null, d.monthly_income ?? null, d.employer ?? null,
-      d.desired_move_in ?? null, d.status ?? "new", d.notes ?? null,
+      d.desired_move_in ?? null, d.follow_up_date ?? null, d.status ?? "new", d.notes ?? null,
     ],
   );
   const row = await get(
-    `SELECT a.*, u.name as unit_name, p.name as property_name
+    `SELECT a.*, u.name as unit_name, u.property_id as property_id, p.name as property_name
      FROM applications a LEFT JOIN units u ON u.id = a.unit_id LEFT JOIN properties p ON p.id = u.property_id
      WHERE a.id = ?`,
     [result.lastInsertRowid],
@@ -715,11 +851,12 @@ app.put("/api/applications/:id", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const { sets, params } = buildUpdate(parsed.data);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
+  sets.push("updated_at = datetime('now')");
   params.push(id);
   const r = await run(`UPDATE applications SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
   const row = await get(
-    `SELECT a.*, u.name as unit_name, p.name as property_name
+    `SELECT a.*, u.name as unit_name, u.property_id as property_id, p.name as property_name
      FROM applications a LEFT JOIN units u ON u.id = a.unit_id LEFT JOIN properties p ON p.id = u.property_id
      WHERE a.id = ?`,
     [id],
@@ -737,9 +874,20 @@ app.delete("/api/applications/:id", async (c) => {
 
 // ── Dashboard summary ──────────────────────────────────────────────
 
+// SQL date for the end of the lease-renewal window (settings.renewal_notice_days, default 60).
+// Takes the reference date as a bound parameter.
+const RENEWAL_WINDOW_END =
+  "date(?, '+' || COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'renewal_notice_days'), 60) || ' days')";
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 app.get("/api/dashboard/summary", async (c) => {
   const today = new Date().toISOString().slice(0, 10);
   const periodNow = today.slice(0, 7);
+  // The client's local date, so "due today" / "expired" match what the operator sees.
+  // Falls back to the UTC date when absent or malformed.
+  const qToday = c.req.query("today");
+  const localToday = qToday && DATE_RE.test(qToday) ? qToday : today;
 
   const safeGet = <T,>(sql: string, params: unknown[] = [], fallback: T) =>
     get<T>(sql, params).catch(() => fallback as T | undefined).then((v) => v ?? fallback);
@@ -760,6 +908,9 @@ app.get("/api/dashboard/summary", async (c) => {
     urgentWorkOrders,
     recentWorkOrders,
     upcomingExpirations,
+    followupsDue,
+    expiredLeases,
+    renewalSetting,
   ] = await Promise.all([
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM properties", [], { n: 0 }),
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM units", [], { n: 0 }),
@@ -807,9 +958,33 @@ app.get("/api/dashboard/summary", async (c) => {
        LEFT JOIN tenants t ON t.id = l.primary_tenant_id
        LEFT JOIN units u ON u.id = l.unit_id
        LEFT JOIN properties p ON p.id = u.property_id
-       WHERE l.status = 'active' AND l.end_date <= date('now', '+60 days')
+       WHERE l.status = 'active' AND l.end_date >= ? AND l.end_date <= ${RENEWAL_WINDOW_END}
        ORDER BY l.end_date ASC LIMIT 6`,
+      [localToday, localToday],
     ),
+    safeQuery<{ id: number; first_name: string; last_name: string; status: string; follow_up_date: string; unit_name: string | null; property_name: string | null }>(
+      `SELECT a.id, a.first_name, a.last_name, a.status, a.follow_up_date,
+         u.name as unit_name, p.name as property_name
+       FROM applications a
+       LEFT JOIN units u ON u.id = a.unit_id
+       LEFT JOIN properties p ON p.id = u.property_id
+       WHERE a.status IN ('new', 'screening') AND a.follow_up_date <= ?
+       ORDER BY a.follow_up_date ASC`,
+      [localToday],
+    ),
+    safeQuery<{ id: number; end_date: string; tenant_first_name: string | null; tenant_last_name: string | null; unit_name: string | null; property_name: string | null }>(
+      `SELECT l.id, l.end_date,
+         t.first_name as tenant_first_name, t.last_name as tenant_last_name,
+         u.name as unit_name, p.name as property_name
+       FROM leases l
+       LEFT JOIN tenants t ON t.id = l.primary_tenant_id
+       LEFT JOIN units u ON u.id = l.unit_id
+       LEFT JOIN properties p ON p.id = u.property_id
+       WHERE l.status = 'active' AND l.end_date < ?
+       ORDER BY l.end_date ASC LIMIT 6`,
+      [localToday],
+    ),
+    safeGet<{ value: string }>("SELECT value FROM settings WHERE key = 'renewal_notice_days'", [], { value: "60" }),
   ]);
 
   return c.json({
@@ -829,6 +1004,10 @@ app.get("/api/dashboard/summary", async (c) => {
     urgent_work_orders: urgentWorkOrders.n,
     recent_work_orders: recentWorkOrders,
     upcoming_expirations: upcomingExpirations,
+    renewal_notice_days: parseInt(renewalSetting.value, 10) || 60,
+    expired_leases: expiredLeases,
+    followups_due_count: followupsDue.length,
+    followups_due: followupsDue.slice(0, 6),
   });
 });
 
