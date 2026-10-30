@@ -549,9 +549,8 @@ app.post("/api/rent-charges/generate", async (c) => {
   );
   let created = 0;
   for (const l of leases) {
-    // Skip if the lease doesn't cover this period at all.
-    const periodStart = `${period}-01`;
-    if (l.end_date < periodStart) continue;
+    // Skip if the lease doesn't cover this period at all (starts after it or ended before it).
+    if (l.start_date.slice(0, 7) > period || l.end_date.slice(0, 7) < period) continue;
     const day = String(Math.min(28, Math.max(1, l.rent_due_day))).padStart(2, "0");
     const dueDate = `${period}-${day}`;
     const r = await run(
