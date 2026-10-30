@@ -80,7 +80,7 @@ export function PropertyDialog({ open, onOpenChange, property, onSaved }: Props)
 
   async function remove() {
     if (!property) return;
-    if (!confirm(`Delete "${property.name}"? This will also delete its units, leases, and rent history.`)) return;
+    if (!confirm(`Delete "${property.name}"? This will also delete its units and leases. Properties with rent history can't be deleted.`)) return;
     try {
       await app.deleteProperty(property.id);
       onOpenChange(false);

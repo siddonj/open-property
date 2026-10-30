@@ -75,7 +75,7 @@ export function UnitDialog({ open, onOpenChange, propertyId, unit, onSaved }: Pr
 
   async function remove() {
     if (!unit) return;
-    if (!confirm(`Delete unit "${unit.name}"? This will also delete leases and rent history for this unit.`)) return;
+    if (!confirm(`Delete unit "${unit.name}"? This will also delete its leases. Units with rent history can't be deleted.`)) return;
     try {
       await app.deleteUnit(unit.id);
       onSaved?.();
