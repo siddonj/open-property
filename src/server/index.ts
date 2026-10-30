@@ -314,6 +314,19 @@ const LEASE_SELECT = `
   LEFT JOIN tenants t ON t.id = l.primary_tenant_id
 `;
 
+// Keep units.status in step with leases: occupied while any lease is active, vacant once
+// none is. Turnover/unavailable units with no active lease are left as they are.
+async function syncUnitOccupancy(unitId: number) {
+  await run(
+    `UPDATE units SET status = CASE
+       WHEN EXISTS (SELECT 1 FROM leases WHERE unit_id = ? AND status = 'active') THEN 'occupied'
+       WHEN status = 'occupied' THEN 'vacant'
+       ELSE status END
+     WHERE id = ?`,
+    [unitId, unitId],
+  );
+}
+
 app.get("/api/leases", async (c) => {
   const status = c.req.query("status");
   const tenantId = intParam(c.req.query("tenant_id"));
@@ -345,10 +358,7 @@ app.post("/api/leases", async (c) => {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [d.unit_id, d.primary_tenant_id ?? null, d.start_date, d.end_date, d.monthly_rent ?? 0, d.deposit ?? 0, d.rent_due_day ?? 1, d.late_fee ?? 0, d.status ?? "active", d.notes ?? null],
   );
-  // Mark the unit as occupied if the new lease is active.
-  if ((d.status ?? "active") === "active") {
-    await run("UPDATE units SET status = 'occupied' WHERE id = ?", [d.unit_id]);
-  }
+  await syncUnitOccupancy(d.unit_id);
   const row = await get(`${LEASE_SELECT} WHERE l.id = ?`, [result.lastInsertRowid]);
   return c.json({ lease: row }, 201);
 });
@@ -360,9 +370,15 @@ app.put("/api/leases/:id", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const { sets, params } = buildUpdate(parsed.data);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
+  const before = await get<{ unit_id: number }>("SELECT unit_id FROM leases WHERE id = ?", [id]);
+  if (!before) return c.json({ error: "Not found" }, 404);
   params.push(id);
   const r = await run(`UPDATE leases SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await syncUnitOccupancy(before.unit_id);
+  if (parsed.data.unit_id !== undefined && parsed.data.unit_id !== before.unit_id) {
+    await syncUnitOccupancy(parsed.data.unit_id);
+  }
   const row = await get(`${LEASE_SELECT} WHERE l.id = ?`, [id]);
   return c.json({ lease: row });
 });
@@ -370,8 +386,10 @@ app.put("/api/leases/:id", async (c) => {
 app.delete("/api/leases/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
-  const r = await run("DELETE FROM leases WHERE id = ?", [id]);
-  if (!r.changes) return c.json({ error: "Not found" }, 404);
+  const lease = await get<{ unit_id: number }>("SELECT unit_id FROM leases WHERE id = ?", [id]);
+  if (!lease) return c.json({ error: "Not found" }, 404);
+  await run("DELETE FROM leases WHERE id = ?", [id]);
+  await syncUnitOccupancy(lease.unit_id);
   return c.json({ ok: true });
 });
 
