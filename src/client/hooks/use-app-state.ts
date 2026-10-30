@@ -8,6 +8,10 @@ import type {
   RentCharge,
   Vendor,
   WorkOrder,
+  Account,
+  Bill,
+  NewBill,
+  NewBillPayment,
   RecurringTask,
   NewRecurringTask,
   ApprovalStatus,
@@ -273,6 +277,42 @@ export function useAppState() {
     return res.work_order;
   }, []);
 
+  // Accounts & bills ─────────────────────────────────────────────
+
+  const listAccounts = useCallback(async (): Promise<Account[]> => {
+    const data = await api<{ accounts: Account[] }>("GET", "/api/accounts");
+    return data.accounts;
+  }, []);
+
+  const listBills = useCallback(async (): Promise<Bill[]> => {
+    const data = await api<{ bills: Bill[] }>("GET", "/api/bills");
+    return data.bills;
+  }, []);
+
+  const createBill = useCallback(async (data: NewBill) => {
+    const res = await api<{ bill: Bill }>("POST", "/api/bills", data);
+    return res.bill;
+  }, []);
+
+  const updateBill = useCallback(async (id: number, data: NewBill) => {
+    const res = await api<{ bill: Bill }>("PUT", `/api/bills/${id}`, data);
+    return res.bill;
+  }, []);
+
+  const deleteBill = useCallback(async (id: number) => {
+    await api("DELETE", `/api/bills/${id}`);
+  }, []);
+
+  const payBill = useCallback(async (id: number, data: NewBillPayment) => {
+    const res = await api<{ bill: Bill }>("POST", `/api/bills/${id}/payments`, data);
+    return res.bill;
+  }, []);
+
+  const voidBillPayment = useCallback(async (paymentId: number) => {
+    const res = await api<{ bill: Bill }>("POST", `/api/bill-payments/${paymentId}/void`);
+    return res.bill;
+  }, []);
+
   // Recurring tasks ──────────────────────────────────────────────
 
   const listRecurringTasks = useCallback(async (): Promise<RecurringTask[]> => {
@@ -398,6 +438,8 @@ export function useAppState() {
     createVendor, updateVendor, deleteVendor,
     // work orders
     listWorkOrders, createWorkOrder, updateWorkOrder, deleteWorkOrder, decideApproval,
+    // accounts & bills
+    listAccounts, listBills, createBill, updateBill, deleteBill, payBill, voidBillPayment,
     // recurring tasks
     listRecurringTasks, createRecurringTask, updateRecurringTask, deleteRecurringTask, generateRecurringTasks,
     // lease checklists

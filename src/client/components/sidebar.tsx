@@ -8,6 +8,7 @@ import {
   Receipt,
   BarChart3,
   FileText,
+  Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Route } from "@/hooks/use-router";
@@ -35,6 +36,7 @@ const sections: { heading: string; items: NavItem[] }[] = [
     items: [
       { label: "Rent",         icon: Receipt,   path: "/rent",        match: (r) => r.name === "rent" },
       { label: "Maintenance",  icon: Wrench,    path: "/maintenance", match: (r) => r.name === "maintenance" },
+      { label: "Expenses",     icon: Wallet,    path: "/expenses",    match: (r) => r.name === "expenses" },
       { label: "Reports",      icon: BarChart3, path: "/reports",     match: (r) => r.name === "reports" },
     ],
   },

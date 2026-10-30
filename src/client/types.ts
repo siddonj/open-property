@@ -214,6 +214,94 @@ export interface WorkOrder {
   vendor_color?: string | null;
 }
 
+export type AccountType = "income" | "expense" | "asset";
+
+export interface Account {
+  id: number;
+  code: string;
+  name: string;
+  type: AccountType;
+  is_operating: number;
+  active: number;
+}
+
+export interface BillLine {
+  id: number;
+  bill_id: number;
+  account_id: number;
+  unit_id: number | null;
+  work_order_id: number | null;
+  description: string;
+  amount_cents: number;
+  // Joined
+  account_code?: string;
+  account_name?: string;
+  account_type?: AccountType;
+  is_operating?: number;
+  unit_name?: string | null;
+  work_order_title?: string | null;
+}
+
+export type BillPaymentMethod = "check" | "ach" | "card" | "cash" | "other";
+
+export interface BillPayment {
+  id: number;
+  bill_id: number;
+  paid_on: string;
+  amount_cents: number;
+  method: BillPaymentMethod;
+  reference: string | null;
+  voided_at: string | null;
+  created_at: string;
+}
+
+export interface Bill {
+  id: number;
+  property_id: number;
+  vendor_id: number | null;
+  bill_date: string;
+  due_date: string | null;
+  reference: string | null;
+  notes: string | null;
+  /** False when a save was interrupted before all lines were written. */
+  complete: boolean;
+  created_at: string;
+  total_cents: number;
+  paid_cents: number;
+  status: "unpaid" | "paid";
+  lines: BillLine[];
+  payments: BillPayment[];
+  // Joined
+  property_name?: string | null;
+  property_color?: string | null;
+  vendor_name?: string | null;
+}
+
+export interface NewBillLine {
+  account_id: number;
+  description: string;
+  amount_cents: number;
+  unit_id?: number | null;
+  work_order_id?: number | null;
+}
+
+export interface NewBill {
+  property_id: number;
+  vendor_id?: number | null;
+  bill_date: string;
+  due_date?: string | null;
+  reference?: string | null;
+  notes?: string | null;
+  lines: NewBillLine[];
+}
+
+export interface NewBillPayment {
+  paid_on: string;
+  method: BillPaymentMethod;
+  amount_cents?: number;
+  reference?: string | null;
+}
+
 export type ApplicationStatus = "new" | "screening" | "approved" | "declined" | "withdrawn";
 
 export interface Application {
