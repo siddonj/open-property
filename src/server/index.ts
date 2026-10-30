@@ -556,7 +556,7 @@ app.get("/api/rent-charges", async (c) => {
   if (period) { where.push("c.period = ?"); params.push(period); }
   if (status) { where.push("c.status = ?"); params.push(status); }
   const sql = `${CHARGE_SELECT}${where.length ? " WHERE " + where.join(" AND ") : ""} ORDER BY c.due_date, p.name, u.name`;
-  const rows = await query(sql, params).catch(() => []);
+  const rows = await query(sql, params);
   return c.json({ charges: rows });
 });
 
@@ -789,7 +789,7 @@ app.get("/api/work-orders", async (c) => {
   const sql = `${WO_SELECT}${where.length ? " WHERE " + where.join(" AND ") : ""} ORDER BY
     CASE w.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
     w.created_at DESC`;
-  const rows = await query(sql, params).catch(() => []);
+  const rows = await query(sql, params);
   return c.json({ work_orders: rows });
 });
 
@@ -1107,7 +1107,7 @@ app.get("/api/applications", async (c) => {
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
      ORDER BY a.created_at DESC`,
     params,
-  ).catch(() => []);
+  );
   return c.json({ applications: rows });
 });
 
@@ -1311,7 +1311,7 @@ app.get("/api/dashboard/summary", async (c) => {
 // ── Settings (key/value) ───────────────────────────────────────────
 
 app.get("/api/settings", async (c) => {
-  const rows = await query<{ key: string; value: string }>("SELECT key, value FROM settings").catch(() => []);
+  const rows = await query<{ key: string; value: string }>("SELECT key, value FROM settings");
   const out: Record<string, string> = {};
   for (const r of rows) out[r.key] = r.value;
   return c.json({ settings: out });
