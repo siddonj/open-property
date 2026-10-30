@@ -116,7 +116,7 @@ curl, and browser checks before the next starts.
       delete with bills 409
 - [ ] Browser: each slice's flow, plus regression checks on rent, maintenance,
       property, dashboard, and the existing report tabs
-- [ ] Each CSV export's rows and totals match the screen and the API
+- [x] Each CSV export's rows and totals match the screen and the API
 - [x] `pnpm typecheck`
 - [x] `pnpm build`
 
@@ -220,8 +220,29 @@ curl, and browser checks before the next starts.
   - **Deferred by Josh:** `index.ts` is about 1,900 lines, past the 1,800 mark
     in Risks. Extracting the financial sections to `src/server/finance.ts` was
     proposed on 2026-10-30 and deferred to a separate change.
-  - **Proof status:** typecheck, build, and the migration are ticked above. The
-    curl and browser checks are recorded per slice in these Deviations, but
-    regression checks on rent, maintenance, dashboard, and the older report
-    tabs, and the CSV-vs-screen check for the bills, income, and P&L exports,
-    are not recorded, so those boxes stay open.
+  - **Proof status:** typecheck, build, the migration, and CSV are ticked
+    above. Per-slice curl and browser checks are recorded in these Deviations.
+    The curl box stays open because Slice A's individual checks (overpayment,
+    date-range cap, interrupted write, and so on) weren't recorded.
+
+- **2026-10-30 — Regression and CSV checks.** Run on a fresh local database in
+  a throwaway worktree, seeded with two leases (rent 2,300 and 1,234.565) over
+  August–October 2026, partial rent payments, and five bills: paid and
+  multi-line with a capital line, overdue, paid then voided, partly paid, and
+  unpaid but not yet due.
+  - **Matched hand totals:** Oakwood P&L (collected 3,800, operating 2,037.33,
+    NOI 1,762.67, below NOI 900, capital 1,200); income filtered to Oakwood;
+    Expenses tab counts (4 unpaid including the voided and partly paid bills,
+    1 overdue, 1 paid).
+  - **CSV vs screen:** the bills (All, with totals row), income (filtered),
+    and both P&L exports match the screen row for row. Budget CSV was checked
+    in Slice C.
+  - **Regression:** the dashboard's October figures; rent ledger payment
+    through the dialog (charge goes to Paid, totals update); new work order
+    through the dialog; rent roll, maintenance, delinquency, occupancy, and
+    budget tabs all load with correct data. No console errors on load.
+  - **Not covered this run:** the property page (its Financials card was
+    checked in Slice B), so the browser box stays open.
+  - **Seen, not Phase 3:** the dashboard counts occupancy from `units.status`
+    (seeded occupied, 80%), while the occupancy report counts leases (40%).
+    Income and maintenance cards show whole dollars, so $0.29 reads "$0".
