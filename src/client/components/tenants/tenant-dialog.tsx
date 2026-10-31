@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { Tenant } from "@/types";
+import { HistoryList } from "@/components/documents/history-list";
 
 interface Props {
   open: boolean;
@@ -83,7 +84,7 @@ export function TenantDialog({ open, onOpenChange, tenant, defaults, onSaved }: 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>{tenant ? "Edit tenant" : "New tenant"}</DialogTitle>
         </DialogHeader>
@@ -133,6 +134,7 @@ export function TenantDialog({ open, onOpenChange, tenant, defaults, onSaved }: 
             <Textarea id="t-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
           </div>
         </div>
+        {tenant && <HistoryList entity="tenant" entityId={tenant.id} />}
         <DialogFooter className="mt-2">
           {tenant && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>

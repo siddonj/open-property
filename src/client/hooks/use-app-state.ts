@@ -35,6 +35,7 @@ import type {
   Me,
   AppUser,
   Role,
+  ActivityRow,
 } from "../types";
 
 /** Why the app can't load: not signed in (401) or signed in without an account (403). */
@@ -150,6 +151,14 @@ export function useAppState() {
     if (me && id === me.id) setMe({ id: me.id, email: me.email, name: res.user.name, role: res.user.role });
     return res.user;
   }, [me]);
+
+  const listActivity = useCallback(async (filter: {
+    user_id?: number; entity?: string; entity_id?: number; from?: string; to?: string; before?: number; limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(filter)) if (v !== undefined && v !== "") qs.set(k, String(v));
+    return api<{ activity: ActivityRow[]; next_before: number | null }>("GET", `/api/activity?${qs.toString()}`);
+  }, []);
 
   // Property mutations ─────────────────────────────────────────────
 
@@ -487,7 +496,7 @@ export function useAppState() {
     loading, error, setError,
     // signed-in user
     me, signOut, authProblem,
-    listUsers, createUser, updateUser,
+    listUsers, createUser, updateUser, listActivity,
     // refresh
     refreshLookups,
     // settings

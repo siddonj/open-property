@@ -512,3 +512,17 @@ export interface AppUser extends Me {
   created_at: string;
   last_seen_at: string | null;
 }
+
+export interface ActivityRow {
+  id: number;
+  user_id: number;
+  user_name: string;
+  user_email: string;
+  at: string;
+  entity: string;
+  entity_id: number | null;
+  action: string;
+  label: string | null;
+  /** Updates only: field → [old, new]. */
+  changes: Record<string, [unknown, unknown]> | null;
+}

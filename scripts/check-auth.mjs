@@ -143,6 +143,66 @@ for (const [method, pattern] of routes) {
 }
 check(`role matrix: ${routes.length} routes × 3 roles`, matrixOk);
 
+// ── Activity history (spec C) ──────────────────────────────────────
+
+async function lastActivity(entity, id) {
+  const r = await call("GET", `/api/activity?entity=${entity}&entity_id=${id}&limit=1`, { as: ADMIN });
+  return r.data?.activity?.[0];
+}
+async function logged(name, entity, id, email, action, field) {
+  const row = await lastActivity(entity, id);
+  const ok = row?.user_email === email && row?.action === action && (!field || field in (row.changes ?? {}));
+  check(`history: ${name}`, ok, JSON.stringify(row));
+}
+const make = async (path, as, body, key) => {
+  const r = await call("POST", path, { as, body });
+  if (r.status !== 201) console.log(`  setup ${path} → ${r.status} ${JSON.stringify(r.data)}`);
+  return r.data?.[key];
+};
+
+const prop = await make("/api/properties", MANAGER, { name: "History Check" }, "property");
+await logged("property create", "property", prop.id, MANAGER, "create");
+await call("PUT", `/api/properties/${prop.id}`, { as: MANAGER, body: { name: "History Check 2" } });
+await logged("property update records the changed field", "property", prop.id, MANAGER, "update", "name");
+const unit = await make("/api/units", MANAGER, { property_id: prop.id, name: "H1" }, "unit");
+await logged("unit create", "unit", unit.id, MANAGER, "create");
+const tenant = await make("/api/tenants", MANAGER, { first_name: "Hist", last_name: "Ory" }, "tenant");
+await logged("tenant create", "tenant", tenant.id, MANAGER, "create");
+const lease = await make("/api/leases", MANAGER, {
+  unit_id: unit.id, primary_tenant_id: tenant.id, start_date: "2026-01-01", end_date: "2026-12-31", monthly_rent: 1000,
+}, "lease");
+await logged("lease create", "lease", lease.id, MANAGER, "create");
+const charge = await make("/api/rent-charges", MANAGER, { lease_id: lease.id, period: "2026-10", due_date: "2026-10-01", amount: 1000 }, "charge");
+await call("POST", "/api/payments", { as: MANAGER, body: { charge_id: charge.id, amount: 100 } });
+await logged("rent payment, on its charge", "rent_charge", charge.id, MANAGER, "payment");
+const vendor = await make("/api/vendors", TECH, { name: "History Vendor" }, "vendor");
+await logged("vendor create by maintenance", "vendor", vendor.id, TECH, "create");
+const wo = await make("/api/work-orders", TECH, { property_id: prop.id, title: "History leak" }, "work_order");
+await call("PUT", `/api/work-orders/${wo.id}`, { as: TECH, body: { status: "completed", cost: 50 } });
+await logged("work order update by maintenance", "work_order", wo.id, TECH, "update", "status");
+const task = await make("/api/recurring-tasks", TECH, {
+  property_id: prop.id, title: "History filter", interval_unit: "month", interval_count: 3, start_date: "2026-11-01",
+}, "recurring_task");
+await logged("recurring task create", "recurring_task", task.id, TECH, "create");
+const accounts = (await call("GET", "/api/accounts", { as: MANAGER })).data.accounts;
+const expense = accounts.find((a) => a.type === "expense") ?? accounts[0];
+const bill = await make("/api/bills", MANAGER, {
+  property_id: prop.id, bill_date: "2026-10-15", lines: [{ account_id: expense.id, description: "Parts", amount_cents: 1234 }],
+}, "bill");
+await logged("bill create", "bill", bill.id, MANAGER, "create", "total_cents");
+const appl = await make("/api/applications", MANAGER, { first_name: "App", last_name: "Licant" }, "application");
+await logged("application create", "application", appl.id, MANAGER, "create");
+await call("PUT", "/api/budgets", { as: MANAGER, body: { property_id: prop.id, year: 2026, lines: [{ account_id: expense.id, amount_cents: 5000 }] } });
+await logged("budget save, on its property", "budget", prop.id, MANAGER, "update");
+await call("DELETE", `/api/tenants/${tenant.id}`, { as: MANAGER });
+await logged("tenant delete", "tenant", tenant.id, MANAGER, "delete");
+const userRow = (await call("GET", `/api/activity?entity=user&limit=100`, { as: ADMIN })).data.activity.find((r) => r.label === TECH);
+check("history: user created by admin", userRow?.user_email === ADMIN && userRow?.action === "create", JSON.stringify(userRow));
+
+check("manager can read one record's history", (await call("GET", `/api/activity?entity=property&entity_id=${prop.id}`, { as: MANAGER })).status === 200);
+check("manager can't browse all history", (await call("GET", "/api/activity", { as: MANAGER })).status === 403);
+check("maintenance can't read history", (await call("GET", `/api/activity?entity=work_order&entity_id=${wo.id}`, { as: TECH })).status === 403);
+
 jwks.close();
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");
 process.exit(failures ? 1 : 0);

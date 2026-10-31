@@ -33,6 +33,12 @@ export function parse(path: string): Route {
   return { name: "not-found" };
 }
 
+/** Navigate from components that don't get `navigate` as a prop; the router hears the popstate. */
+export function navigateTo(to: string) {
+  window.history.pushState(null, "", to);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 export function useRouter() {
   const [path, setPath] = useState<string>(() => window.location.pathname);
 

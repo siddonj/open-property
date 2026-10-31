@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { Lease, LeaseStatus, Tenant, Unit } from "@/types";
+import { HistoryList } from "@/components/documents/history-list";
 
 interface Props {
   open: boolean;
@@ -151,7 +152,7 @@ export function LeaseDialog({ open, onOpenChange, lease, defaults, onSaved }: Pr
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[90dvh] max-w-lg overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>{lease ? "Edit lease" : "New lease"}</DialogTitle>
         </DialogHeader>
@@ -228,6 +229,7 @@ export function LeaseDialog({ open, onOpenChange, lease, defaults, onSaved }: Pr
             <Textarea id="l-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
           </div>
         </div>
+        {lease && <HistoryList entity="lease" entityId={lease.id} />}
         <DialogFooter className="mt-2">
           {lease && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>
