@@ -202,3 +202,45 @@ Slice A results, 2026-10-31 (scratch copy p5, its own D1 state):
   - Manager: full sidebar, the dashboard loads, and Settings shows Vendors
     only.
 - `tsc --noEmit` and `vite build` pass.
+
+Slice B results, 2026-10-31 (scratch copy p5, a fresh D1, Access mode):
+
+- All 45 write handlers call `logActivity`. A script walks every
+  `app.post/put/delete` in `index.ts` and finds none missing.
+- `scripts/check-auth.mjs` passes 32 checks on two runs in a row. The 16
+  new ones cover:
+  - creating a property, unit, tenant, lease, vendor, recurring task, bill,
+    and application, plus deleting a tenant
+  - a rent payment, a work-order update by maintenance, and a budget save
+  - users created by an admin
+  - field-level changes on property and work-order updates
+  - a manager reading one record's history (200) but not browsing all of it
+    (403), and maintenance getting 403
+- `UPDATE activity` and `DELETE FROM activity` through `wrangler d1
+  execute` both fail with "activity is append-only".
+- Browser (admin):
+  - The Activity tab lists every change with its user, time, record, and
+    "field: old → new" lines.
+  - Clicking a work-order row opens that work order through its deep link,
+    and the dialog's History list shows the same rows.
+- `tsc --noEmit` and `vite build` pass.
+
+Slice B deviations:
+
+- **Checklists and payments are logged on their parent.** Checklist changes
+  are recorded on the lease, rent payments on the rent charge, and bill
+  payments and voids on the bill. Budget saves are recorded on the property
+  (entity `budget`, with the property id). This way each record's History
+  shows them.
+- **`history-list.tsx` lives in `components/documents/`**, as the plan
+  listed. Formatting helpers live in `src/client/lib/activity.ts`, shared by
+  the Activity tab and the History list.
+- **The four record dialogs now scroll** (`max-h-[90dvh] overflow-y-auto`,
+  with horizontal overflow hidden). The History section made them taller
+  than short screens. The vendored `ui/dialog.tsx` is unchanged.
+- **`navigateTo()`** was added to `use-router.ts`, so the Activity tab
+  (which doesn't receive `navigate`) can follow deep links.
+- **Known rough edge:** bill totals show raw cents in history
+  ("total cents: — → 1234"), and update labels use the name from before
+  the change.
+

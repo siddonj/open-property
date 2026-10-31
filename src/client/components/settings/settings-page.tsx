@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { isStaff } from "@/lib/permissions";
 import type { Vendor, VendorCategory } from "@/types";
 import { UsersTab } from "./users-tab";
+import { ActivityTab } from "./activity-tab";
 
 const COLORS = ["sky", "emerald", "amber", "rose", "violet", "fuchsia", "teal", "orange", "slate"];
 
@@ -48,6 +49,7 @@ export function SettingsPage() {
             <TabsTrigger value="vendors">Vendors</TabsTrigger>
             {isAdmin && <TabsTrigger value="policy">Rent policy</TabsTrigger>}
             {isAdmin && <TabsTrigger value="users">Users</TabsTrigger>}
+            {isAdmin && <TabsTrigger value="activity">Activity</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="vendors" className="mt-4">
@@ -61,6 +63,11 @@ export function SettingsPage() {
           {isAdmin && (
             <TabsContent value="users" className="mt-4">
               <UsersTab />
+            </TabsContent>
+          )}
+          {isAdmin && (
+            <TabsContent value="activity" className="mt-4">
+              <ActivityTab />
             </TabsContent>
           )}
         </Tabs>

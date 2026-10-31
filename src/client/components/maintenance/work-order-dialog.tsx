@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { isStaff } from "@/lib/permissions";
 import type { Account, ApprovalStatus, Unit, WorkOrder, WorkOrderPriority, WorkOrderStatus } from "@/types";
+import { HistoryList } from "@/components/documents/history-list";
 
 interface Props {
   open: boolean;
@@ -194,7 +195,7 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
   return (
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>{workOrder ? "Edit work order" : "New work order"}</DialogTitle>
         </DialogHeader>
@@ -330,6 +331,7 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
             {formError}
           </p>
         )}
+        {workOrder && <HistoryList entity="work_order" entityId={workOrder.id} />}
         <DialogFooter className="mt-2">
           {workOrder && staff && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>

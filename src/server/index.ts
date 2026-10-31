@@ -89,6 +89,7 @@ const ACCESS: [method: string, pattern: string, roles: Role[]][] = [
   ["GET", "/api/dashboard*", AM],
   ["*", "/api/reports*", AM],
   ["*", "/api/budgets*", AM],
+  ["GET", "/api/activity", AM], // managers: one record's history only (checked in the handler)
 ];
 const ACCESS_RULES = ACCESS.map(([method, pattern, roles]) => ({
   method,
@@ -127,6 +128,43 @@ app.use("/api/*", async (c, next) => {
   }
   await next();
 });
+
+// ── Activity history (Phase 5) ─────────────────────────────────────
+
+type Changes = Record<string, [unknown, unknown]>;
+
+// The fields in `patch` whose stored value actually changes (spec C1). Booleans compare as 0/1,
+// the way SQLite stores them.
+function diff(before: Record<string, unknown> | undefined, patch: Record<string, unknown>): Changes {
+  const out: Changes = {};
+  for (const [k, raw] of Object.entries(patch)) {
+    if (raw === undefined) continue;
+    const v = typeof raw === "boolean" ? (raw ? 1 : 0) : raw;
+    const old = before?.[k] ?? null;
+    if (old !== (v ?? null)) out[k] = [old, v ?? null];
+  }
+  return out;
+}
+
+// Called by every successful write handler after its change (spec C1). Append-only: the table's
+// triggers reject UPDATE and DELETE.
+async function logActivity(
+  c: Context<Env>,
+  entity: string,
+  entityId: number | bigint | null,
+  action: string,
+  label?: string | null,
+  changes?: Changes,
+) {
+  await run(
+    "INSERT INTO activity (user_id, entity, entity_id, action, label, changes) VALUES (?, ?, ?, ?, ?, ?)",
+    [c.get("user").id, entity, entityId === null ? null : Number(entityId), action, label ?? null,
+      changes && Object.keys(changes).length ? JSON.stringify(changes) : null],
+  );
+}
+
+const fullName = (r: { first_name?: unknown; last_name?: unknown } | undefined) =>
+  r ? `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() : null;
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -249,6 +287,7 @@ app.post("/api/properties", async (c) => {
     [d.name, d.type ?? "single_family", d.address ?? null, d.city ?? null, d.state ?? null, d.zip ?? null, d.year_built ?? null, d.notes ?? null, d.color ?? "sky"],
   );
   const row = await get("SELECT * FROM properties WHERE id = ?", [result.lastInsertRowid]);
+  await logActivity(c, "property", result.lastInsertRowid, "create", d.name);
   return c.json({ property: row }, 201);
 });
 
@@ -260,8 +299,10 @@ app.put("/api/properties/:id", async (c) => {
   const { sets, params } = buildUpdate(parsed.data);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   params.push(id);
+  const before = await get<Record<string, unknown>>("SELECT * FROM properties WHERE id = ?", [id]);
   const r = await run(`UPDATE properties SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "property", id, "update", before?.name as string | undefined, diff(before, parsed.data));
   const row = await get("SELECT * FROM properties WHERE id = ?", [id]);
   return c.json({ property: row });
 });
@@ -275,8 +316,10 @@ app.delete("/api/properties/:id", async (c) => {
   if (await get("SELECT 1 FROM bills WHERE property_id = ? UNION ALL SELECT 1 FROM budgets WHERE property_id = ? LIMIT 1", [id, id])) {
     return c.json({ error: "This property has bills or budgets. Its financial records are kept, so it can't be deleted" }, 409);
   }
+  const before = await get<Record<string, unknown>>("SELECT name FROM properties WHERE id = ?", [id]);
   const r = await run("DELETE FROM properties WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "property", id, "delete", before?.name as string | undefined);
   return c.json({ ok: true });
 });
 
@@ -335,6 +378,7 @@ app.post("/api/units", async (c) => {
     [d.property_id, d.name, d.bedrooms ?? 1, d.bathrooms ?? 1, d.sqft ?? null, d.market_rent ?? 0, d.status ?? "vacant", d.notes ?? null],
   );
   const row = await get(`${UNIT_SELECT} WHERE u.id = ?`, [result.lastInsertRowid]);
+  await logActivity(c, "unit", result.lastInsertRowid, "create", d.name);
   return c.json({ unit: row }, 201);
 });
 
@@ -346,8 +390,10 @@ app.put("/api/units/:id", async (c) => {
   const { sets, params } = buildUpdate(parsed.data);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   params.push(id);
+  const before = await get<Record<string, unknown>>("SELECT * FROM units WHERE id = ?", [id]);
   const r = await run(`UPDATE units SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "unit", id, "update", before?.name as string | undefined, diff(before, parsed.data));
   const row = await get(`${UNIT_SELECT} WHERE u.id = ?`, [id]);
   return c.json({ unit: row });
 });
@@ -358,8 +404,10 @@ app.delete("/api/units/:id", async (c) => {
   if (await hasRentHistory("u.id", id)) {
     return c.json({ error: "This unit has rent history, so it can't be deleted. End or cancel its leases instead." }, 409);
   }
+  const before = await get<Record<string, unknown>>("SELECT name FROM units WHERE id = ?", [id]);
   const r = await run("DELETE FROM units WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "unit", id, "delete", before?.name as string | undefined);
   return c.json({ ok: true });
 });
 
@@ -427,6 +475,7 @@ app.post("/api/tenants", async (c) => {
     [d.first_name, d.last_name, d.email ?? null, d.phone ?? null, d.date_of_birth ?? null, d.emergency_contact ?? null, d.employer ?? null, d.monthly_income ?? null, d.notes ?? null],
   );
   const row = await get("SELECT * FROM tenants WHERE id = ?", [result.lastInsertRowid]);
+  await logActivity(c, "tenant", result.lastInsertRowid, "create", `${d.first_name} ${d.last_name}`);
   return c.json({ tenant: row }, 201);
 });
 
@@ -438,8 +487,10 @@ app.put("/api/tenants/:id", async (c) => {
   const { sets, params } = buildUpdate(parsed.data);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   params.push(id);
+  const before = await get<Record<string, unknown>>("SELECT * FROM tenants WHERE id = ?", [id]);
   const r = await run(`UPDATE tenants SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "tenant", id, "update", fullName(before), diff(before, parsed.data));
   const row = await get("SELECT * FROM tenants WHERE id = ?", [id]);
   return c.json({ tenant: row });
 });
@@ -447,8 +498,10 @@ app.put("/api/tenants/:id", async (c) => {
 app.delete("/api/tenants/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const before = await get<Record<string, unknown>>("SELECT first_name, last_name FROM tenants WHERE id = ?", [id]);
   const r = await run("DELETE FROM tenants WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "tenant", id, "delete", fullName(before));
   return c.json({ ok: true });
 });
 
@@ -556,6 +609,7 @@ app.post("/api/leases", async (c) => {
   );
   await syncUnitOccupancy(d.unit_id);
   const row = await get(`${LEASE_SELECT} WHERE l.id = ?`, [result.lastInsertRowid]);
+  await logActivity(c, "lease", result.lastInsertRowid, "create", await leaseLabel(Number(result.lastInsertRowid)));
   return c.json({ lease: row }, 201);
 });
 
@@ -566,7 +620,7 @@ app.put("/api/leases/:id", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const { sets, params } = buildUpdate(parsed.data);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
-  const before = await get<LeaseShape>("SELECT unit_id, start_date, end_date, status FROM leases WHERE id = ?", [id]);
+  const before = await get<LeaseShape & Record<string, unknown>>("SELECT * FROM leases WHERE id = ?", [id]);
   if (!before) return c.json({ error: "Not found" }, 404);
   const p = parsed.data;
   const conflict = await leaseConflict({
@@ -579,6 +633,7 @@ app.put("/api/leases/:id", async (c) => {
   params.push(id);
   const r = await run(`UPDATE leases SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "lease", id, "update", await leaseLabel(id), diff(before, parsed.data));
   await syncUnitOccupancy(before.unit_id);
   if (parsed.data.unit_id !== undefined && parsed.data.unit_id !== before.unit_id) {
     await syncUnitOccupancy(parsed.data.unit_id);
@@ -595,10 +650,22 @@ app.delete("/api/leases/:id", async (c) => {
   if (await hasRentHistory("l.id", id)) {
     return c.json({ error: "This lease has rent history, so it can't be deleted. End or cancel it instead." }, 409);
   }
+  const label = await leaseLabel(id);
   await run("DELETE FROM leases WHERE id = ?", [id]);
+  await logActivity(c, "lease", id, "delete", label);
   await syncUnitOccupancy(lease.unit_id);
   return c.json({ ok: true });
 });
+
+// Unit name and primary tenant, for activity labels.
+async function leaseLabel(id: number): Promise<string | null> {
+  const r = await get<{ label: string }>(
+    `SELECT u.name || COALESCE(' · ' || t.first_name || ' ' || t.last_name, '') as label
+     FROM leases l JOIN units u ON u.id = l.unit_id LEFT JOIN tenants t ON t.id = l.primary_tenant_id WHERE l.id = ?`,
+    [id],
+  );
+  return r?.label ?? null;
+}
 
 // ── Lease checklists (move-in / move-out) ──────────────────────────
 
@@ -671,6 +738,7 @@ app.post("/api/leases/:id/checklists", async (c) => {
     `INSERT INTO lease_checklist_items (checklist_id, label, sort) VALUES ${labels.map(() => "(?, ?, ?)").join(", ")}`,
     labels.flatMap((label, i) => [created.lastInsertRowid, label, i]),
   );
+  await logActivity(c, "lease", id, "checklist_create", `${parsed.data.kind} checklist`);
   return c.json({ checklists: await checklistsForLease(id) }, 201);
 });
 
@@ -679,13 +747,14 @@ app.post("/api/checklists/:id/items", async (c) => {
   if (!id) return c.json({ error: "Invalid ID" }, 400);
   const parsed = await parseJson(c, ChecklistItemInput.pick({ label: true }));
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const list = await get<{ id: number }>("SELECT id FROM lease_checklists WHERE id = ?", [id]);
+  const list = await get<{ id: number; lease_id: number }>("SELECT id, lease_id FROM lease_checklists WHERE id = ?", [id]);
   if (!list) return c.json({ error: "Not found" }, 404);
   await run(
     `INSERT INTO lease_checklist_items (checklist_id, label, sort)
      VALUES (?, ?, (SELECT COALESCE(MAX(sort), -1) + 1 FROM lease_checklist_items WHERE checklist_id = ?))`,
     [id, parsed.data.label, id],
   );
+  await logActivity(c, "lease", list.lease_id, "checklist_item_add", parsed.data.label);
   return c.json({ ok: true }, 201);
 });
 
@@ -699,16 +768,26 @@ app.put("/api/checklist-items/:id", async (c) => {
   if (done !== undefined) sets.push(done ? "done_at = datetime('now')" : "done_at = NULL");
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   params.push(id);
+  const item = await get<{ lease_id: number; label: string; done: number }>(
+    "SELECT cl.lease_id, i.label, i.done FROM lease_checklist_items i JOIN lease_checklists cl ON cl.id = i.checklist_id WHERE i.id = ?",
+    [id],
+  );
   const r = await run(`UPDATE lease_checklist_items SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "lease", item?.lease_id ?? null, "checklist_item_update", item?.label, diff(item, { label, done }));
   return c.json({ ok: true });
 });
 
 app.delete("/api/checklist-items/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const item = await get<{ lease_id: number; label: string; done: number }>(
+    "SELECT cl.lease_id, i.label, i.done FROM lease_checklist_items i JOIN lease_checklists cl ON cl.id = i.checklist_id WHERE i.id = ?",
+    [id],
+  );
   const r = await run("DELETE FROM lease_checklist_items WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "lease", item?.lease_id ?? null, "checklist_item_delete", item?.label);
   return c.json({ ok: true });
 });
 
@@ -761,6 +840,7 @@ app.post("/api/rent-charges", async (c) => {
     return c.json({ charge: existing });
   }
   const row = await get(`${CHARGE_SELECT} WHERE c.id = ?`, [result.lastInsertRowid]);
+  await logActivity(c, "rent_charge", result.lastInsertRowid, "create", `${d.period} · ${await leaseLabel(d.lease_id) ?? ""}`);
   return c.json({ charge: row }, 201);
 });
 
@@ -792,6 +872,7 @@ app.post("/api/rent-charges/generate", async (c) => {
      WHERE status IN ('open', 'partial') AND amount_paid < amount AND due_date < ?`,
     [today],
   );
+  await logActivity(c, "rent_charge", null, "generate", `${period}: ${created} created`);
   return c.json({ created, period });
 });
 
@@ -809,8 +890,10 @@ app.put("/api/rent-charges/:id", async (c) => {
   const { sets, params } = buildUpdate(parsed.data);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   params.push(id);
+  const before = await get<Record<string, unknown>>("SELECT * FROM rent_charges WHERE id = ?", [id]);
   const r = await run(`UPDATE rent_charges SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "rent_charge", id, "update", before?.period as string | undefined, diff(before, parsed.data));
   const row = await get(`${CHARGE_SELECT} WHERE c.id = ?`, [id]);
   return c.json({ charge: row });
 });
@@ -818,8 +901,10 @@ app.put("/api/rent-charges/:id", async (c) => {
 app.delete("/api/rent-charges/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const before = await get<Record<string, unknown>>("SELECT * FROM rent_charges WHERE id = ?", [id]);
   const r = await run("DELETE FROM rent_charges WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "rent_charge", id, "delete", before?.period as string | undefined);
   return c.json({ ok: true });
 });
 
@@ -868,6 +953,7 @@ app.post("/api/payments", async (c) => {
     [d.charge_id, d.paid_at ?? null, d.amount, d.method ?? "cash", d.reference ?? null, d.notes ?? null],
   );
   await recomputeCharge(d.charge_id, requestToday(c));
+  await logActivity(c, "rent_charge", d.charge_id, "payment", `${d.amount} ${d.method ?? "cash"}`);
   const updated = await get(`${CHARGE_SELECT} WHERE c.id = ?`, [d.charge_id]);
   return c.json({ charge: updated }, 201);
 });
@@ -875,10 +961,11 @@ app.post("/api/payments", async (c) => {
 app.delete("/api/payments/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
-  const row = await get<{ charge_id: number }>("SELECT charge_id FROM payments WHERE id = ?", [id]);
+  const row = await get<{ charge_id: number; amount: number; method: string }>("SELECT charge_id, amount, method FROM payments WHERE id = ?", [id]);
   if (!row) return c.json({ error: "Not found" }, 404);
   await run("DELETE FROM payments WHERE id = ?", [id]);
   await recomputeCharge(row.charge_id, requestToday(c));
+  await logActivity(c, "rent_charge", row.charge_id, "payment_delete", `${row.amount} ${row.method}`);
   return c.json({ ok: true });
 });
 
@@ -907,6 +994,7 @@ app.post("/api/vendors", async (c) => {
     [d.name, d.category ?? "general", d.phone ?? null, d.email ?? null, d.notes ?? null, d.color ?? "slate"],
   );
   const row = await get("SELECT * FROM vendors WHERE id = ?", [result.lastInsertRowid]);
+  await logActivity(c, "vendor", result.lastInsertRowid, "create", d.name);
   return c.json({ vendor: row }, 201);
 });
 
@@ -918,8 +1006,10 @@ app.put("/api/vendors/:id", async (c) => {
   const { sets, params } = buildUpdate(parsed.data);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   params.push(id);
+  const before = await get<Record<string, unknown>>("SELECT * FROM vendors WHERE id = ?", [id]);
   const r = await run(`UPDATE vendors SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "vendor", id, "update", before?.name as string | undefined, diff(before, parsed.data));
   const row = await get("SELECT * FROM vendors WHERE id = ?", [id]);
   return c.json({ vendor: row });
 });
@@ -930,8 +1020,10 @@ app.delete("/api/vendors/:id", async (c) => {
   if (await get("SELECT 1 FROM bills WHERE vendor_id = ?", [id])) {
     return c.json({ error: "This vendor has bills. Its financial records are kept, so it can't be deleted" }, 409);
   }
+  const before = await get<Record<string, unknown>>("SELECT name FROM vendors WHERE id = ?", [id]);
   const r = await run("DELETE FROM vendors WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "vendor", id, "delete", before?.name as string | undefined);
   return c.json({ ok: true });
 });
 
@@ -1016,6 +1108,7 @@ app.post("/api/work-orders", async (c) => {
     ],
   );
   const row = await get(`${WO_SELECT} WHERE w.id = ?`, [result.lastInsertRowid]);
+  await logActivity(c, "work_order", result.lastInsertRowid, "create", d.title);
   return c.json({ work_order: row }, 201);
 });
 
@@ -1024,8 +1117,8 @@ app.put("/api/work-orders/:id", async (c) => {
   if (!id) return c.json({ error: "Invalid ID" }, 400);
   const parsed = await parseJson(c, WorkOrderInput.partial());
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const existing = await get<{ status: string; estimated_cost: number | null; approval_status: string | null }>(
-    "SELECT status, estimated_cost, approval_status FROM work_orders WHERE id = ?",
+  const existing = await get<{ status: string; estimated_cost: number | null; approval_status: string | null } & Record<string, unknown>>(
+    "SELECT * FROM work_orders WHERE id = ?",
     [id],
   );
   if (!existing) return c.json({ error: "Not found" }, 404);
@@ -1058,6 +1151,7 @@ app.put("/api/work-orders/:id", async (c) => {
   params.push(id);
   const r = await run(`UPDATE work_orders SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "work_order", id, "update", existing.title as string, diff(existing, patch));
   const row = await get(`${WO_SELECT} WHERE w.id = ?`, [id]);
   return c.json({ work_order: row });
 });
@@ -1065,8 +1159,10 @@ app.put("/api/work-orders/:id", async (c) => {
 app.delete("/api/work-orders/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const before = await get<Record<string, unknown>>("SELECT title FROM work_orders WHERE id = ?", [id]);
   const r = await run("DELETE FROM work_orders WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "work_order", id, "delete", before?.title as string | undefined);
   return c.json({ ok: true });
 });
 
@@ -1075,7 +1171,7 @@ app.post("/api/work-orders/:id/approval", async (c) => {
   if (!id) return c.json({ error: "Invalid ID" }, 400);
   const parsed = await parseJson(c, z.object({ decision: z.enum(["approved", "rejected"]) }));
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const existing = await get<{ approval_status: string | null }>("SELECT approval_status FROM work_orders WHERE id = ?", [id]);
+  const existing = await get<{ approval_status: string | null; title: string }>("SELECT approval_status, title FROM work_orders WHERE id = ?", [id]);
   if (!existing) return c.json({ error: "Not found" }, 404);
   if (!existing.approval_status) return c.json({ error: "This work order doesn't require approval" }, 409);
   const approved = parsed.data.decision === "approved";
@@ -1083,6 +1179,7 @@ app.post("/api/work-orders/:id/approval", async (c) => {
     `UPDATE work_orders SET approval_status = ?, approved_at = ${approved ? "datetime('now')" : "NULL"} WHERE id = ?`,
     [parsed.data.decision, id],
   );
+  await logActivity(c, "work_order", id, approved ? "approve" : "reject", existing.title);
   const row = await get(`${WO_SELECT} WHERE w.id = ?`, [id]);
   return c.json({ work_order: row });
 });
@@ -1211,6 +1308,7 @@ app.post("/api/recurring-tasks", async (c) => {
       d.active === false ? 0 : 1,
     ],
   );
+  await logActivity(c, "recurring_task", result.lastInsertRowid, "create", d.title);
   const row = await get<RecurringTask>(`${RT_SELECT} WHERE r.id = ?`, [result.lastInsertRowid]);
   return c.json({ recurring_task: row && withNext(row) }, 201);
 });
@@ -1224,8 +1322,10 @@ app.put("/api/recurring-tasks/:id", async (c) => {
   const { sets, params } = buildUpdate({ ...rest, active: active === undefined ? undefined : active ? 1 : 0 });
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   params.push(id);
+  const before = await get<Record<string, unknown>>("SELECT * FROM recurring_tasks WHERE id = ?", [id]);
   const r = await run(`UPDATE recurring_tasks SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "recurring_task", id, "update", before?.title as string | undefined, diff(before, { ...rest, active }));
   const row = await get<RecurringTask>(`${RT_SELECT} WHERE r.id = ?`, [id]);
   return c.json({ recurring_task: row && withNext(row) });
 });
@@ -1234,8 +1334,10 @@ app.delete("/api/recurring-tasks/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
   // Generated work orders are kept; their recurring_task_id is set to NULL by the FK.
+  const before = await get<Record<string, unknown>>("SELECT title FROM recurring_tasks WHERE id = ?", [id]);
   const r = await run("DELETE FROM recurring_tasks WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "recurring_task", id, "delete", before?.title as string | undefined);
   return c.json({ ok: true });
 });
 
@@ -1274,6 +1376,7 @@ app.post("/api/recurring-tasks/generate", async (c) => {
       [horizon, t.id],
     );
   }
+  await logActivity(c, "work_order", null, "generate", `${created} created through ${horizon}`);
   return c.json({ created, through: horizon });
 });
 
@@ -1328,6 +1431,9 @@ const BILL_SELECT = `
   LEFT JOIN vendors v ON v.id = b.vendor_id`;
 
 /** Bills matching `where` (on alias b) with their lines and payments attached. */
+const billLabel = (b: { id: number; reference?: string | null } | undefined) =>
+  b?.reference ? `Bill ${b.reference}` : `Bill #${b?.id}`;
+
 async function loadBills(where: string[], params: unknown[]) {
   const w = where.length ? ` WHERE ${where.join(" AND ")}` : "";
   const bills = await query<BillRow>(`${BILL_SELECT}${w} ORDER BY b.bill_date DESC, b.id DESC`, params);
@@ -1438,7 +1544,9 @@ app.post("/api/bills", async (c) => {
   );
   const id = Number(result.lastInsertRowid);
   await insertLines(id, d.lines);
-  return c.json({ bill: await loadBill(id) }, 201);
+  const bill = await loadBill(id);
+  await logActivity(c, "bill", id, "create", billLabel(bill), bill ? { total_cents: [null, bill.total_cents] } : undefined);
+  return c.json({ bill }, 201);
 });
 
 // Full replace of header and lines.
@@ -1452,6 +1560,7 @@ app.put("/api/bills/:id", async (c) => {
     return c.json({ error: BILL_LOCKED }, 409);
   }
   const d = parsed.data;
+  const prior = await loadBill(id);
   const bad = await checkBill(d, id);
   if (bad) return c.json({ error: bad.error }, bad.status);
   // ponytail: payment check and rewrite aren't atomic; a payment landing mid-edit is possible but single-user.
@@ -1461,7 +1570,14 @@ app.put("/api/bills/:id", async (c) => {
   );
   await run("DELETE FROM bill_lines WHERE bill_id = ?", [id]);
   await insertLines(id, d.lines);
-  return c.json({ bill: await loadBill(id) });
+  const bill = await loadBill(id);
+  const changes = diff(prior as unknown as Record<string, unknown>, {
+    property_id: d.property_id, vendor_id: d.vendor_id ?? null, bill_date: d.bill_date,
+    due_date: d.due_date ?? null, reference: d.reference ?? null, notes: d.notes ?? null,
+  });
+  if (prior?.total_cents !== bill?.total_cents) changes.total_cents = [prior?.total_cents ?? null, bill?.total_cents ?? null];
+  await logActivity(c, "bill", id, "update", billLabel(bill), changes);
+  return c.json({ bill });
 });
 
 app.delete("/api/bills/:id", async (c) => {
@@ -1471,8 +1587,10 @@ app.delete("/api/bills/:id", async (c) => {
   if (await get("SELECT 1 FROM bill_payments WHERE bill_id = ?", [id])) {
     return c.json({ error: "This bill has payment records, so it can't be deleted" }, 409);
   }
+  const before = await get<Record<string, unknown>>("SELECT id, reference FROM bills WHERE id = ?", [id]);
   const r = await run("DELETE FROM bills WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "bill", id, "delete", billLabel(before as { id: number; reference: string | null }));
   return c.json({ ok: true });
 });
 
@@ -1494,16 +1612,18 @@ app.post("/api/bills/:id/payments", async (c) => {
     "INSERT INTO bill_payments (bill_id, paid_on, amount_cents, method, reference) VALUES (?, ?, ?, ?, ?)",
     [id, d.paid_on, amount, d.method, d.reference ?? null],
   );
+  await logActivity(c, "bill", id, "payment", `${amount} cents ${d.method}`);
   return c.json({ bill: await loadBill(id) }, 201);
 });
 
 app.post("/api/bill-payments/:id/void", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
-  const payment = await get<{ bill_id: number; voided_at: string | null }>("SELECT bill_id, voided_at FROM bill_payments WHERE id = ?", [id]);
+  const payment = await get<{ bill_id: number; voided_at: string | null; amount_cents: number }>("SELECT bill_id, voided_at, amount_cents FROM bill_payments WHERE id = ?", [id]);
   if (!payment) return c.json({ error: "Not found" }, 404);
   if (payment.voided_at) return c.json({ error: "Payment is already voided" }, 409);
   await run("UPDATE bill_payments SET voided_at = datetime('now') WHERE id = ?", [id]);
+  await logActivity(c, "bill", payment.bill_id, "void", `${payment.amount_cents} cents`);
   return c.json({ bill: await loadBill(payment.bill_id) });
 });
 
@@ -1565,6 +1685,7 @@ app.post("/api/applications", async (c) => {
      WHERE a.id = ?`,
     [result.lastInsertRowid],
   );
+  await logActivity(c, "application", result.lastInsertRowid, "create", `${d.first_name} ${d.last_name}`);
   return c.json({ application: row }, 201);
 });
 
@@ -1577,8 +1698,10 @@ app.put("/api/applications/:id", async (c) => {
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   sets.push("updated_at = datetime('now')");
   params.push(id);
+  const before = await get<Record<string, unknown>>("SELECT * FROM applications WHERE id = ?", [id]);
   const r = await run(`UPDATE applications SET ${sets.join(", ")} WHERE id = ?`, params);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "application", id, "update", fullName(before), diff(before, parsed.data));
   const row = await get(
     `SELECT a.*, u.name as unit_name, u.property_id as property_id, p.name as property_name
      FROM applications a LEFT JOIN units u ON u.id = a.unit_id LEFT JOIN properties p ON p.id = u.property_id
@@ -1591,8 +1714,10 @@ app.put("/api/applications/:id", async (c) => {
 app.delete("/api/applications/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const before = await get<Record<string, unknown>>("SELECT first_name, last_name FROM applications WHERE id = ?", [id]);
   const r = await run("DELETE FROM applications WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
+  await logActivity(c, "application", id, "delete", fullName(before));
   return c.json({ ok: true });
 });
 
@@ -1847,6 +1972,7 @@ const SettingsInput = z.object({
 app.put("/api/settings", async (c) => {
   const parsed = await parseJson(c, SettingsInput);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const prior = await query<{ key: string; value: string }>("SELECT key, value FROM settings");
   const entries = Object.entries(parsed.data).filter(([, v]) => v !== undefined);
   for (const [key, value] of entries) {
     await run(
@@ -1855,6 +1981,8 @@ app.put("/api/settings", async (c) => {
       [key, String(value)],
     );
   }
+  await logActivity(c, "settings", null, "update", null,
+    diff(Object.fromEntries(prior.map((p) => [p.key, p.value])), Object.fromEntries(entries.map(([k, v]) => [k, String(v)]))));
   const rows = await query<{ key: string; value: string }>("SELECT key, value FROM settings");
   const out: Record<string, string> = {};
   for (const r of rows) out[r.key] = r.value;
@@ -2104,6 +2232,7 @@ app.put("/api/budgets", async (c) => {
       );
     }
   }
+  await logActivity(c, "budget", d.property_id, "update", `${d.year}: ${d.lines.length} line(s)`);
   return c.json({ ok: true });
 });
 
@@ -2174,6 +2303,7 @@ app.post("/api/users", async (c) => {
   }
   const r = await run("INSERT INTO users (email, name, role) VALUES (?, ?, ?)", [email, parsed.data.name ?? "", parsed.data.role]);
   const user = await get(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [r.lastInsertRowid]);
+  await logActivity(c, "user", r.lastInsertRowid, "create", email, { role: [null, parsed.data.role] });
   return c.json({ user }, 201);
 });
 
@@ -2188,7 +2318,7 @@ app.put("/api/users/:id", async (c) => {
   if (!id) return c.json({ error: "Invalid ID" }, 400);
   const parsed = await parseJson(c, UserPatch);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const existing = await get<{ role: Role; active: number }>("SELECT role, active FROM users WHERE id = ?", [id]);
+  const existing = await get<{ role: Role; active: number; email: string } & Record<string, unknown>>("SELECT * FROM users WHERE id = ?", [id]);
   if (!existing) return c.json({ error: "Not found" }, 404);
   const p = parsed.data;
   const losesAdmin = existing.role === "admin" && existing.active === 1
@@ -2200,8 +2330,43 @@ app.put("/api/users/:id", async (c) => {
   const { sets, params } = buildUpdate({ name: p.name, role: p.role, active: p.active === undefined ? undefined : p.active ? 1 : 0 });
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   await run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...params, id]);
+  await logActivity(c, "user", id, "update", existing.email, diff(existing, p));
   const user = await get(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [id]);
   return c.json({ user });
+});
+
+// ── Activity (Phase 5) ─────────────────────────────────────────────
+
+// Spec C3. Admins can browse everything; managers only one record's history (entity + entity_id).
+// ponytail: from/to compare against UTC timestamps, so a day boundary can be off by the UTC offset.
+app.get("/api/activity", async (c) => {
+  const entity = c.req.query("entity");
+  const entityId = intParam(c.req.query("entity_id"));
+  if (c.get("user").role !== "admin" && !(entity && entityId)) {
+    return c.json({ error: "You don't have access to this." }, 403);
+  }
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const userId = intParam(c.req.query("user_id"));
+  if (userId) { where.push("a.user_id = ?"); params.push(userId); }
+  if (entity) { where.push("a.entity = ?"); params.push(entity); }
+  if (entityId) { where.push("a.entity_id = ?"); params.push(entityId); }
+  const from = c.req.query("from");
+  if (from && isCalendarDate(from)) { where.push("a.at >= ?"); params.push(from); }
+  const to = c.req.query("to");
+  if (to && isCalendarDate(to)) { where.push("a.at < date(?, '+1 day')"); params.push(to); }
+  const before = intParam(c.req.query("before"));
+  if (before) { where.push("a.id < ?"); params.push(before); }
+  const limit = Math.min(100, Math.max(1, intParam(c.req.query("limit")) ?? 100));
+  const rows = await query<{ id: number; changes: string | null }>(
+    `SELECT a.*, u.name as user_name, u.email as user_email FROM activity a JOIN users u ON u.id = a.user_id
+     ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY a.id DESC LIMIT ?`,
+    [...params, limit],
+  );
+  return c.json({
+    activity: rows.map((r) => ({ ...r, changes: r.changes ? JSON.parse(r.changes) : null })),
+    next_before: rows.length === limit ? rows[rows.length - 1].id : null,
+  });
 });
 
 // ── Health ─────────────────────────────────────────────────────────

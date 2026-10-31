@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { Account, Bill, NewBill, Unit } from "@/types";
+import { HistoryList } from "@/components/documents/history-list";
 
 interface Props {
   open: boolean;
@@ -162,7 +163,7 @@ export function BillDialog({ open, onOpenChange, bill, accounts, prefill, onSave
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>{current ? "Bill" : "New bill"}</DialogTitle>
           <DialogDescription>
@@ -292,6 +293,7 @@ export function BillDialog({ open, onOpenChange, bill, accounts, prefill, onSave
             {formError}
           </p>
         )}
+        {bill && <HistoryList entity="bill" entityId={bill.id} />}
         <DialogFooter className="mt-2">
           {current && current.payments.length === 0 && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>
