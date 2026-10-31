@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Receipt, Sparkles } from "lucide-react";
 import { useApp } from "@/context";
-import { addMonths, cn, currentPeriod, formatDate, formatMoney, formatPeriod, takeIdParam, takeParam } from "@/lib/utils";
+import { addMonths, cn, currentPeriod, formatDate, formatMoney, formatPeriod, takeIdParam, takeParam, toIsoDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -73,7 +73,7 @@ export function RentPage() {
     const collected = charges.reduce((s, c) => s + (c.amount_paid ?? 0), 0);
     const outstanding = Math.max(0, charged - collected);
     const overdue = charges
-      .filter((c) => c.status === "overdue" || (c.status !== "paid" && c.status !== "waived" && c.due_date < new Date().toISOString().slice(0, 10) && c.amount_paid < c.amount))
+      .filter((c) => c.status === "overdue" || (c.status !== "paid" && c.status !== "waived" && c.due_date < toIsoDate(new Date()) && c.amount_paid < c.amount))
       .reduce((s, c) => s + ((c.amount ?? 0) - (c.amount_paid ?? 0)), 0);
     return { charged, collected, outstanding, overdue };
   }, [charges]);

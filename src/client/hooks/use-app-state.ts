@@ -215,7 +215,7 @@ export function useAppState() {
   }, []);
 
   const generateCharges = useCallback(async (period: string) => {
-    const data = await api<{ created: number; period: string }>("POST", "/api/rent-charges/generate", { period });
+    const data = await api<{ created: number; period: string }>("POST", `/api/rent-charges/generate?today=${toIsoDate(new Date())}`, { period });
     return data;
   }, []);
 
@@ -227,7 +227,7 @@ export function useAppState() {
     notes?: string | null;
     paid_at?: string;
   }) => {
-    const res = await api<{ charge: RentCharge }>("POST", "/api/payments", input);
+    const res = await api<{ charge: RentCharge }>("POST", `/api/payments?today=${toIsoDate(new Date())}`, input);
     return res.charge;
   }, []);
 

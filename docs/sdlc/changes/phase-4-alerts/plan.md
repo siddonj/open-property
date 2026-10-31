@@ -185,3 +185,22 @@ Results, 2026-10-30 (scratch copy, `today=2026-10-30` while the UTC date was 10-
   `dashboard-page.tsx` under 400 lines.
 - The rent page reads `?period=` in its `useState` initializer (read only) and strips it in the
   load effect, so React StrictMode's double render can't drop the period.
+
+## Follow-up fixes (2026-10-31)
+
+Found during Phase 4 and fixed after merge:
+
+- The rent ledger's own overdue status (`/api/rent-charges/generate` and
+  `recomputeCharge` after a payment) now uses `requestToday` instead of UTC
+  `date('now')`. The client sends `?today=` on those calls.
+- The "Ending in 30 days" count on the Active leases card no longer counts
+  holdover leases (`end_date >= today`).
+- `requestToday` rejects impossible dates like 2026-02-31 (`isCalendarDate`) and
+  falls back to the UTC date. `DATE_RE` is removed.
+
+Checked in the scratch copy:
+
+- Charge due 10-30: stays `open` with `today=2026-10-30` and turns `overdue` with
+  `today=2026-10-31`. This holds for both generate and payment.
+- Move-out count: 0 with only a holdover lease, 1 once a lease ends on 11-15.
+- `today=2026-02-31` falls back to the UTC date.
