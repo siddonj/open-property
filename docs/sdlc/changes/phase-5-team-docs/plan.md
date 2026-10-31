@@ -2,7 +2,7 @@
 
 Intent: [`intent.md`](./intent.md)
 Spec: [`spec.md`](./spec.md)
-Status: Approved 2026-10-31
+Status: Approved 2026-10-31; built 2026-10-31 (slices A–D)
 
 Delivered in four slices, in order. Each slice ends with typecheck, build, and
 its own checks before the next one starts. All checks run in the scratch
@@ -280,4 +280,65 @@ Slice C deviations:
   with the message "Its leases have documents. Delete them first." Work
   orders and bills don't cascade from properties (`SET NULL` and
   `RESTRICT`), so only leases matter there.
+
+Slice D results, 2026-10-31:
+
+- **Deploy config.** `wrangler.toml` gets an `[assets]` block
+  (`directory = "./dist"`, `not_found_handling = "single-page-application"`,
+  `run_worker_first = ["/api/*"]`), following Cloudflare's static-assets
+  docs. With a build, `/`, `/leases`, and `/properties/1` return
+  `index.html`, `/api/*` reaches the Worker, and `/api/nope` gets 404.
+  Without a `dist` folder, `wrangler dev` refuses to start, so `pnpm dev`
+  now runs `mkdir -p dist` first; an empty `dist` is enough.
+- **README:** the Clawnify button and deploy steps are replaced by a
+  Wrangler self-deploy section covering D1, R2, the Access application,
+  the variables, migrations, and upgrade order. It also adds local sign-in
+  setup with `.dev.vars`, how to run `check-auth.mjs`, the Team, history &
+  documents features, and the project layout.
+- **CLAUDE.md:** a new "Auth, roles, history" section, plus the `.dev.vars`
+  note, the check script, the updated `index.ts` size and sections, and a
+  Wrangler deployment section.
+- **Phase 1–4 regression as admin (scratch copy):**
+  - The dashboard, tenants, applications, leases, rent, expenses, P&L,
+    budget, and income pages all load, and every `/api` call returns 200.
+  - Rent: generating November charges and recording a partial payment
+    (status `partial`) works.
+  - Approvals: an approval-gated work order is refused "in progress"
+    (400), then approved, then completed.
+  - Bills: a bill linked to that work order, paid and then voided (paid
+    back to 0), shows on the P&L.
+  - Editing a lease and loading the dashboard summary both work.
+- **Independent review** (a separate model, read-only, against `REVIEW.md`
+  and the spec): 0 critical, 0 high, 2 medium, and 4 low findings. All six
+  are fixed:
+  1. **MEDIUM:** a file type of `constructor` or `toString` matched
+     `Object.prototype` and skipped the content check. The lookup now uses
+     `Object.hasOwn`. A new check uploads HTML with type `constructor` and
+     gets 415.
+  2. **MEDIUM:** managers could read user and settings history with
+     `entity` plus `entity_id`. Non-admins are now limited to the record
+     types in `MANAGER_HISTORY`. New checks: user and settings history get
+     403 for managers.
+  3. **LOW:** maintenance saw the current tenant's name on units
+     (`active_tenant_name`). It's now null for maintenance (`unitForRole`).
+     New check: null for maintenance, the name for a manager.
+  4. **LOW:** the last-admin guard was check-then-update. The `UPDATE` now
+     re-checks that another active admin exists, and returns 409 when no
+     row changes.
+  5. **LOW:** a missing or unparseable `Content-Length` let the whole body
+     be read before the size check. Such uploads are now rejected up front.
+     Browser uploads still work (re-checked), but this case wasn't tested
+     on its own.
+  6. **LOW:** `filename*` now percent-encodes `' ( ) *`, as RFC 5987
+     requires.
+
+  The reviewer confirmed: the JWT checks (kid, RS256 only, iss, aud,
+  exp); that Hono's middleware and router see the same path, so encoded
+  paths can't slip past; that `HEAD` and `OPTIONS` fail closed; the dev-user
+  guard; the bootstrap; document access on all four routes; history
+  coverage and immutability; and the deploy config.
+- After the fixes: `check-auth.mjs` passes 58 checks on a fresh database
+  and again on a re-run. `tsc --noEmit` and `vite build` pass.
+- **Still not verified:** how Chrome shows a PDF under `CSP: sandbox` (see
+  Slice C).
 
