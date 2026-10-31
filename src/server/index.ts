@@ -1,13 +1,130 @@
 import { Hono, type Context } from "hono";
+import { verifyWithJwks } from "hono/jwt";
 import { z } from "zod";
 import { initDB, query, get, run } from "./db";
 
-type Env = { Bindings: { DB: D1Database } };
+const ROLES = ["admin", "manager", "maintenance"] as const;
+type Role = (typeof ROLES)[number];
+type User = { id: number; email: string; name: string; role: Role };
+
+type Env = {
+  Bindings: {
+    DB: D1Database;
+    DOCS: R2Bucket;
+    ACCESS_TEAM_DOMAIN?: string;
+    ACCESS_AUD?: string;
+    ADMIN_EMAIL?: string;
+    AUTH_DEV_USER?: string;
+  };
+  Variables: { user: User };
+};
 
 const app = new Hono<Env>();
 
 app.use("*", async (c, next) => {
   initDB(c.env);
+  await next();
+});
+
+// ── Auth and access (Phase 5) ──────────────────────────────────────
+
+const accessConfigured = (c: Context<Env>) => !!(c.env.ACCESS_TEAM_DOMAIN && c.env.ACCESS_AUD);
+
+// Which sign-in applies (spec A1): Cloudflare Access when configured; otherwise a dev user, only on
+// localhost; otherwise none, so an unconfigured deploy is closed rather than open.
+async function signedInEmail(c: Context<Env>): Promise<string | null | "unconfigured"> {
+  if (accessConfigured(c)) {
+    const team = c.env.ACCESS_TEAM_DOMAIN!.replace(/\/+$/, "");
+    const token = c.req.header("Cf-Access-Jwt-Assertion");
+    if (!token) return null;
+    try {
+      const payload = await verifyWithJwks(
+        token,
+        {
+          jwks_uri: `${team}/cdn-cgi/access/certs`,
+          allowedAlgorithms: ["RS256"],
+          verification: { iss: team, aud: c.env.ACCESS_AUD! },
+        },
+        { cf: { cacheTtl: 3600, cacheEverything: true } } as RequestInit,
+      );
+      if (typeof payload.exp !== "number" || typeof payload.email !== "string") return null;
+      return payload.email.toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+  const host = new URL(c.req.url).hostname;
+  if (c.env.AUTH_DEV_USER && (host === "localhost" || host === "127.0.0.1")) return c.env.AUTH_DEV_USER.toLowerCase();
+  return "unconfigured";
+}
+
+const AM: Role[] = ["admin", "manager"];
+const AMT: Role[] = ["admin", "manager", "maintenance"];
+
+// Spec B2. First match wins; `*` at the end matches the path and anything under it, `:id` one
+// segment. A route not listed here is admin-only, so new routes fail closed.
+const ACCESS: [method: string, pattern: string, roles: Role[]][] = [
+  ["GET", "/api/me", AMT],
+  ["GET", "/api/settings", AMT],
+  ["GET", "/api/properties*", AMT],
+  ["GET", "/api/units*", AMT],
+  ["*", "/api/properties*", AM],
+  ["*", "/api/units*", AM],
+  ["DELETE", "/api/vendors/:id", AM],
+  ["*", "/api/vendors*", AMT],
+  ["DELETE", "/api/work-orders/:id", AM],
+  ["POST", "/api/work-orders/:id/approval", AM],
+  ["*", "/api/work-orders*", AMT],
+  ["*", "/api/recurring-tasks*", AMT],
+  ["*", "/api/tenants*", AM],
+  ["*", "/api/leases*", AM],
+  ["*", "/api/checklists*", AM],
+  ["*", "/api/checklist-items*", AM],
+  ["*", "/api/rent-charges*", AM],
+  ["*", "/api/payments*", AM],
+  ["*", "/api/accounts*", AM],
+  ["*", "/api/bills*", AM],
+  ["*", "/api/bill-payments*", AM],
+  ["*", "/api/applications*", AM],
+  ["GET", "/api/dashboard*", AM],
+  ["*", "/api/reports*", AM],
+  ["*", "/api/budgets*", AM],
+];
+const ACCESS_RULES = ACCESS.map(([method, pattern, roles]) => ({
+  method,
+  re: new RegExp("^" + pattern.replace(/\*$/, "(/.*)?").replace(/:id/g, "[^/]+") + "$"),
+  roles,
+}));
+
+function rolesFor(method: string, path: string): Role[] {
+  const rule = ACCESS_RULES.find((r) => (r.method === "*" || r.method === method) && r.re.test(path));
+  return rule ? rule.roles : ["admin"];
+}
+
+app.use("/api/*", async (c, next) => {
+  if (c.req.path === "/api/health") return next();
+  const email = await signedInEmail(c);
+  if (email === "unconfigured") return c.json({ error: "Sign-in is not configured" }, 401);
+  if (!email) return c.json({ error: "Not signed in" }, 401);
+
+  type Row = User & { active: number; last_seen_at: string | null };
+  const find = () => get<Row>("SELECT id, email, name, role, active, last_seen_at FROM users WHERE email = ?", [email]);
+  let row = await find();
+  // ADMIN_EMAIL bootstrap (A3): only when that email has no row, so a deactivated admin stays out.
+  if (!row && email === c.env.ADMIN_EMAIL?.toLowerCase()) {
+    await run("INSERT OR IGNORE INTO users (email, role) VALUES (?, 'admin')", [email]);
+    row = await find();
+  }
+  if (!row || !row.active) return c.json({ error: `Your account isn't set up. Ask an admin to add ${email}.` }, 403);
+
+  const hourAgo = new Date(Date.now() - 3600_000).toISOString().replace("T", " ").slice(0, 19);
+  if (!row.last_seen_at || row.last_seen_at < hourAgo) {
+    await run("UPDATE users SET last_seen_at = datetime('now') WHERE id = ?", [row.id]);
+  }
+  c.set("user", { id: row.id, email: row.email, name: row.name, role: row.role });
+  if (!rolesFor(c.req.method, c.req.path).includes(row.role)) {
+    return c.json({ error: "You don't have access to this." }, 403);
+  }
   await next();
 });
 
@@ -853,7 +970,7 @@ const WO_SELECT = `
   SELECT w.*,
     p.name as property_name, p.color as property_color,
     u.name as unit_name,
-    t.first_name as tenant_first_name, t.last_name as tenant_last_name,
+    t.first_name as tenant_first_name, t.last_name as tenant_last_name, t.phone as tenant_phone,
     v.name as vendor_name, v.color as vendor_color,
     (SELECT bl.bill_id FROM bill_lines bl WHERE bl.work_order_id = w.id) as bill_id
   FROM work_orders w
@@ -2029,6 +2146,62 @@ app.get("/api/reports/budget", async (c) => {
     };
   });
   return c.json({ property_id: propertyId, year, lines: rows });
+});
+
+// ── Users (Phase 5) ────────────────────────────────────────────────
+
+app.get("/api/me", (c) => c.json({ user: c.get("user"), sign_out: accessConfigured(c) }));
+
+const USER_COLS = "id, email, name, role, active, created_at, last_seen_at";
+
+app.get("/api/users", async (c) => {
+  const users = await query(`SELECT ${USER_COLS} FROM users ORDER BY active DESC, email`);
+  return c.json({ users });
+});
+
+const UserInput = z.object({
+  email: z.string().trim().email(),
+  name: z.string().trim().max(100).optional(),
+  role: z.enum(ROLES),
+});
+
+app.post("/api/users", async (c) => {
+  const parsed = await parseJson(c, UserInput);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const email = parsed.data.email.toLowerCase();
+  if (await get("SELECT 1 FROM users WHERE email = ?", [email])) {
+    return c.json({ error: "That email already has an account." }, 409);
+  }
+  const r = await run("INSERT INTO users (email, name, role) VALUES (?, ?, ?)", [email, parsed.data.name ?? "", parsed.data.role]);
+  const user = await get(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [r.lastInsertRowid]);
+  return c.json({ user }, 201);
+});
+
+const UserPatch = z.object({
+  name: z.string().trim().max(100),
+  role: z.enum(ROLES),
+  active: z.boolean(),
+}).partial().strict();
+
+app.put("/api/users/:id", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const parsed = await parseJson(c, UserPatch);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const existing = await get<{ role: Role; active: number }>("SELECT role, active FROM users WHERE id = ?", [id]);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+  const p = parsed.data;
+  const losesAdmin = existing.role === "admin" && existing.active === 1
+    && ((p.role !== undefined && p.role !== "admin") || p.active === false);
+  if (losesAdmin) {
+    const admins = await get<{ n: number }>("SELECT COUNT(*) as n FROM users WHERE role = 'admin' AND active = 1");
+    if ((admins?.n ?? 0) <= 1) return c.json({ error: "There must be at least one active admin." }, 409);
+  }
+  const { sets, params } = buildUpdate({ name: p.name, role: p.role, active: p.active === undefined ? undefined : p.active ? 1 : 0 });
+  if (!sets.length) return c.json({ error: "No fields" }, 400);
+  await run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...params, id]);
+  const user = await get(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [id]);
+  return c.json({ user });
 });
 
 // ── Health ─────────────────────────────────────────────────────────

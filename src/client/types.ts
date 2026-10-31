@@ -210,6 +210,7 @@ export interface WorkOrder {
   unit_name?: string | null;
   tenant_first_name?: string | null;
   tenant_last_name?: string | null;
+  tenant_phone?: string | null;
   vendor_name?: string | null;
   vendor_color?: string | null;
   bill_id?: number | null;
@@ -490,7 +491,24 @@ export type NewProperty = Partial<Omit<Property, "id" | "created_at" | "unit_cou
 export type NewUnit = Partial<Omit<Unit, "id" | "created_at" | "property_name" | "property_color" | "property_address" | "property_city" | "active_lease_id" | "active_tenant_name">> & { property_id: number; name: string };
 export type NewTenant = Partial<Omit<Tenant, "id" | "created_at" | "active_unit_id" | "active_unit_name" | "active_property_name">> & { first_name: string; last_name: string };
 export type NewLease = Partial<Omit<Lease, "id" | "created_at" | "unit_name" | "property_id" | "property_name" | "property_color" | "tenant_first_name" | "tenant_last_name" | "tenant_email" | "tenant_phone" | "move_in_done" | "move_in_total" | "move_out_done" | "move_out_total">> & { unit_id: number; start_date: string; end_date: string };
-export type NewWorkOrder = Partial<Omit<WorkOrder, "id" | "created_at" | "property_name" | "property_color" | "unit_name" | "tenant_first_name" | "tenant_last_name" | "vendor_name" | "vendor_color" | "approval_status" | "approved_at" | "recurring_task_id" | "occurrence_date">> & { title: string };
+export type NewWorkOrder = Partial<Omit<WorkOrder, "id" | "created_at" | "property_name" | "property_color" | "unit_name" | "tenant_first_name" | "tenant_last_name" | "tenant_phone" | "vendor_name" | "vendor_color" | "approval_status" | "approved_at" | "recurring_task_id" | "occurrence_date">> & { title: string };
 export type NewRecurringTask = Omit<RecurringTask, "id" | "created_at" | "last_generated_through" | "next_occurrence" | "property_name" | "unit_name" | "vendor_name">;
 export type NewVendor = Partial<Omit<Vendor, "id" | "created_at">> & { name: string };
 export type NewApplication = Partial<Omit<Application, "id" | "created_at" | "updated_at" | "unit_name" | "property_id" | "property_name">> & { first_name: string; last_name: string };
+
+// ── Phase 5: users and roles ───────────────────────────────────────
+
+export type Role = "admin" | "manager" | "maintenance";
+
+export interface Me {
+  id: number;
+  email: string;
+  name: string;
+  role: Role;
+}
+
+export interface AppUser extends Me {
+  active: number;
+  created_at: string;
+  last_seen_at: string | null;
+}

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { isStaff } from "@/lib/permissions";
 import type { Account, ApprovalStatus, Unit, WorkOrder, WorkOrderPriority, WorkOrderStatus } from "@/types";
 
 interface Props {
@@ -150,7 +151,8 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
   const estimateChanged = (workOrder?.estimated_cost ?? null) !== estimateNum;
 
   // D2: completed work with a cost becomes one linked bill line, so the P&L counts it once.
-  const canRecordExpense = !!workOrder && workOrder.status === "completed" && (workOrder.cost ?? 0) > 0
+  const staff = !!app.me && isStaff(app.me.role);
+  const canRecordExpense = staff && !!workOrder && workOrder.status === "completed" && (workOrder.cost ?? 0) > 0
     && workOrder.property_id != null && !workOrder.bill_id;
 
   async function recordExpense() {
@@ -198,6 +200,13 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
         </DialogHeader>
 
         <div className="grid gap-3">
+          {workOrder?.tenant_first_name && (
+            <p className="text-sm">
+              <span className="text-muted-foreground">Tenant: </span>
+              {workOrder.tenant_first_name} {workOrder.tenant_last_name}
+              {workOrder.tenant_phone && <> · <a className="underline" href={`tel:${workOrder.tenant_phone}`}>{workOrder.tenant_phone}</a></>}
+            </p>
+          )}
           <div>
             <Label htmlFor="wo-title">Title</Label>
             <Input id="wo-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Leaking kitchen faucet" />
@@ -289,8 +298,8 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
                     </span>
                   )}
                   <div className="ml-auto flex gap-2">
-                    {approval !== "approved" && <Button type="button" size="sm" onClick={() => decide("approved")}>Approve</Button>}
-                    {approval !== "rejected" && <Button type="button" size="sm" variant="outline" onClick={() => decide("rejected")}>Reject</Button>}
+                    {staff && approval !== "approved" && <Button type="button" size="sm" onClick={() => decide("approved")}>Approve</Button>}
+                    {staff && approval !== "rejected" && <Button type="button" size="sm" variant="outline" onClick={() => decide("rejected")}>Reject</Button>}
                   </div>
                 </>
               ) : needsApproval ? (
@@ -322,7 +331,7 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
           </p>
         )}
         <DialogFooter className="mt-2">
-          {workOrder && (
+          {workOrder && staff && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>
               Delete
             </Button>

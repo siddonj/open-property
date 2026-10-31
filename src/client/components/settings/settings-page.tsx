@@ -17,7 +17,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { isStaff } from "@/lib/permissions";
 import type { Vendor, VendorCategory } from "@/types";
+import { UsersTab } from "./users-tab";
 
 const COLORS = ["sky", "emerald", "amber", "rose", "violet", "fuchsia", "teal", "orange", "slate"];
 
@@ -32,26 +34,35 @@ const VENDOR_CATEGORIES: { value: VendorCategory; label: string }[] = [
 ];
 
 export function SettingsPage() {
+  const isAdmin = useApp().me?.role === "admin";
   return (
     <div className="flex-1 overflow-auto">
       <div className="mx-auto w-full max-w-5xl space-y-6 p-6">
         <header>
           <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-          <p className="text-sm text-muted-foreground">Vendors and rent policy defaults</p>
+          <p className="text-sm text-muted-foreground">{isAdmin ? "Vendors, rent policy defaults, and users" : "Vendors"}</p>
         </header>
 
         <Tabs defaultValue="vendors">
           <TabsList>
             <TabsTrigger value="vendors">Vendors</TabsTrigger>
-            <TabsTrigger value="policy">Rent policy</TabsTrigger>
+            {isAdmin && <TabsTrigger value="policy">Rent policy</TabsTrigger>}
+            {isAdmin && <TabsTrigger value="users">Users</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="vendors" className="mt-4">
             <VendorsTab />
           </TabsContent>
-          <TabsContent value="policy" className="mt-4">
-            <PolicyTab />
-          </TabsContent>
+          {isAdmin && (
+            <TabsContent value="policy" className="mt-4">
+              <PolicyTab />
+            </TabsContent>
+          )}
+          {isAdmin && (
+            <TabsContent value="users" className="mt-4">
+              <UsersTab />
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </div>
@@ -222,7 +233,7 @@ function VendorDialog({
           </div>
         </div>
         <DialogFooter>
-          {vendor && (
+          {vendor && app.me && isStaff(app.me.role) && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>
               <Trash2 className="mr-1 h-4 w-4" /> Delete
             </Button>

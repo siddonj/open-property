@@ -32,7 +32,16 @@ import type {
   MaintenanceReport,
   DelinquencyRow,
   OccupancyReport,
+  Me,
+  AppUser,
+  Role,
 } from "../types";
+
+/** Why the app can't load: not signed in (401) or signed in without an account (403). */
+export interface AuthProblem {
+  status: 401 | 403;
+  message: string;
+}
 
 export interface AppSettings {
   default_rent_due_day: number;
@@ -74,6 +83,9 @@ export function useAppState() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
+  const [signOut, setSignOut] = useState(false);
+  const [authProblem, setAuthProblem] = useState<AuthProblem | null>(null);
 
   // Lookup loaders ─────────────────────────────────────────────────
 
@@ -102,6 +114,16 @@ export function useAppState() {
     (async () => {
       try {
         setLoading(true);
+        // /api/me first: a 401 or 403 replaces the whole app, so nothing else should load.
+        const r = await fetch("/api/me");
+        const body = (await r.json().catch(() => ({}))) as { user?: Me; sign_out?: boolean; error?: string };
+        if (r.status === 401 || r.status === 403) {
+          setAuthProblem({ status: r.status, message: body.error ?? r.statusText });
+          return;
+        }
+        if (!r.ok || !body.user) throw new Error(body.error ?? `${r.status} ${r.statusText}`);
+        setMe(body.user);
+        setSignOut(!!body.sign_out);
         await refreshLookups();
       } catch (err) {
         setError((err as Error).message);
@@ -110,6 +132,24 @@ export function useAppState() {
       }
     })();
   }, [refreshLookups]);
+
+  // Users (admin) ──────────────────────────────────────────────────
+
+  const listUsers = useCallback(async () => {
+    const data = await api<{ users: AppUser[] }>("GET", "/api/users");
+    return data.users;
+  }, []);
+
+  const createUser = useCallback(async (data: { email: string; name?: string; role: Role }) => {
+    const res = await api<{ user: AppUser }>("POST", "/api/users", data);
+    return res.user;
+  }, []);
+
+  const updateUser = useCallback(async (id: number, patch: { name?: string; role?: Role; active?: boolean }) => {
+    const res = await api<{ user: AppUser }>("PUT", `/api/users/${id}`, patch);
+    if (me && id === me.id) setMe({ id: me.id, email: me.email, name: res.user.name, role: res.user.role });
+    return res.user;
+  }, [me]);
 
   // Property mutations ─────────────────────────────────────────────
 
@@ -445,6 +485,9 @@ export function useAppState() {
     // data
     properties, vendors, settings,
     loading, error, setError,
+    // signed-in user
+    me, signOut, authProblem,
+    listUsers, createUser, updateUser,
     // refresh
     refreshLookups,
     // settings

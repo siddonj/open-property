@@ -1,4 +1,6 @@
-import { useAppState } from "./hooks/use-app-state";
+import { useEffect } from "react";
+import { useAppState, type AuthProblem } from "./hooks/use-app-state";
+import { canSeePage } from "./lib/permissions";
 import { useRouter } from "./hooks/use-router";
 import { AppContext } from "./context";
 import { Sidebar } from "./components/sidebar";
@@ -19,6 +21,14 @@ import { SettingsPage } from "./components/settings/settings-page";
 export function App() {
   const state = useAppState();
   const { route, navigate } = useRouter();
+  const role = state.me?.role;
+
+  // Maintenance has no dashboard; their home is the work-order list.
+  useEffect(() => {
+    if (role === "maintenance" && route.name === "dashboard") navigate("/maintenance");
+  }, [role, route.name, navigate]);
+
+  if (state.authProblem) return <SignInProblem problem={state.authProblem} />;
 
   return (
     <AppContext.Provider value={state}>
@@ -29,6 +39,8 @@ export function App() {
             <div className="flex flex-1 items-center justify-center text-muted-foreground">
               Loading…
             </div>
+          ) : role && !canSeePage(role, route.name) ? (
+            <Placeholder title="You don't have access" message="Your role can't open this page. Ask an admin if you need it." />
           ) : (
             <>
               {route.name === "dashboard" && <DashboardPage navigate={navigate} />}
@@ -52,6 +64,22 @@ export function App() {
         <ErrorBanner />
       </div>
     </AppContext.Provider>
+  );
+}
+
+function SignInProblem({ problem }: { problem: AuthProblem }) {
+  const notConfigured = problem.message === "Sign-in is not configured";
+  return (
+    <main className="flex h-screen flex-col items-center justify-center gap-2 p-12 text-center">
+      <h1 className="text-xl font-semibold tracking-tight">
+        {problem.status === 403 ? "Your account isn't set up" : "Sign-in required"}
+      </h1>
+      <p className="max-w-md text-sm text-muted-foreground">
+        {notConfigured
+          ? "Sign-in isn't configured for this deployment. Set ACCESS_TEAM_DOMAIN and ACCESS_AUD for Cloudflare Access, or for local dev copy .dev.vars.example to .dev.vars."
+          : problem.message}
+      </p>
+    </main>
   );
 }
 
