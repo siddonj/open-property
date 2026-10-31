@@ -5,6 +5,7 @@ import { cn, colorClasses } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PropertyDialog } from "./property-dialog";
+import { isStaff } from "@/lib/permissions";
 import type { Property } from "@/types";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -16,7 +17,8 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 export function PropertiesList({ navigate }: { navigate: (to: string) => void }) {
-  const { properties } = useApp();
+  const { properties, me } = useApp();
+  const staff = !!me && isStaff(me.role);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Property | undefined>(undefined);
 
@@ -33,10 +35,12 @@ export function PropertiesList({ navigate }: { navigate: (to: string) => void })
               {properties.length} propert{properties.length === 1 ? "y" : "ies"} · {totalUnits} unit{totalUnits === 1 ? "" : "s"} · {occupied}/{totalUnits || 0} occupied
             </p>
           </div>
-          <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }}>
-            <Plus className="mr-1 h-4 w-4" />
-            New property
-          </Button>
+          {staff && (
+            <Button onClick={() => { setEditing(undefined); setDialogOpen(true); }}>
+              <Plus className="mr-1 h-4 w-4" />
+              New property
+            </Button>
+          )}
         </header>
 
         {properties.length === 0 ? (
@@ -44,9 +48,9 @@ export function PropertiesList({ navigate }: { navigate: (to: string) => void })
             <Building2 className="h-8 w-8 text-muted-foreground" />
             <p className="font-medium">No properties yet</p>
             <p className="text-sm text-muted-foreground">Add your first property to start managing units, leases, and rent.</p>
-            <Button className="mt-2" onClick={() => { setEditing(undefined); setDialogOpen(true); }}>
+            {staff && <Button className="mt-2" onClick={() => { setEditing(undefined); setDialogOpen(true); }}>
               <Plus className="mr-1 h-4 w-4" /> New property
-            </Button>
+            </Button>}
           </Card>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -84,13 +88,15 @@ export function PropertiesList({ navigate }: { navigate: (to: string) => void })
                     <Stat label="Occupancy" value={`${occRate}%`} />
                   </div>
                   <div className="mt-3 flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); setEditing(p); setDialogOpen(true); }}
-                      className="text-xs text-muted-foreground hover:text-foreground"
-                    >
-                      Edit
-                    </button>
+                    {staff ? (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setEditing(p); setDialogOpen(true); }}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Edit
+                      </button>
+                    ) : <span />}
                     {p.year_built && (
                       <span className="text-xs text-muted-foreground">Built {p.year_built}</span>
                     )}

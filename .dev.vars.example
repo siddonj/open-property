@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local dev. Without it every /api call returns 401 (sign-in fails closed).
+# The dev user only works on localhost and only when ACCESS_TEAM_DOMAIN/ACCESS_AUD are unset.
+AUTH_DEV_USER=you@example.com
+# First admin. Created on first request from this email.
+ADMIN_EMAIL=you@example.com

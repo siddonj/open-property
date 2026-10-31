@@ -15,7 +15,7 @@ export type Route =
   | { name: "settings" }
   | { name: "not-found" };
 
-function parse(path: string): Route {
+export function parse(path: string): Route {
   if (path === "/" || path === "/dashboard") return { name: "dashboard" };
   if (path === "/properties") return { name: "properties" };
   let m = path.match(/^\/properties\/(\d+)$/);

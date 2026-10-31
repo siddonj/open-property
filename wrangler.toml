@@ -7,3 +7,8 @@ compatibility_flags = ["nodejs_compat"]
 binding = "DB"
 database_name = "open-property-db"
 database_id = "local"
+
+# Phase 5 documents. Private: files are only served through /api/documents/:id/file.
+[[r2_buckets]]
+binding = "DOCS"
+bucket_name = "open-property-docs"

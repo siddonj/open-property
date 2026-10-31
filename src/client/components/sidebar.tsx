@@ -9,8 +9,12 @@ import {
   BarChart3,
   FileText,
   Wallet,
+  LogOut,
 } from "lucide-react";
+import { useApp } from "@/context";
 import { cn } from "@/lib/utils";
+import { canSeePage } from "@/lib/permissions";
+import { parse } from "@/hooks/use-router";
 import type { Route } from "@/hooks/use-router";
 
 interface NavItem {
@@ -55,6 +59,10 @@ export function Sidebar({
   route: Route;
   navigate: (to: string) => void;
 }) {
+  const { me, signOut } = useApp();
+  const visible = sections
+    .map((s) => ({ ...s, items: s.items.filter((i) => !me || canSeePage(me.role, parse(i.path).name)) }))
+    .filter((s) => s.items.length > 0);
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
       <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
@@ -73,7 +81,7 @@ export function Sidebar({
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2 py-3">
-        {sections.map((section) => (
+        {visible.map((section) => (
           <div key={section.heading} className="mb-4">
             <div className="px-3 pb-1 font-mono text-[11px] font-medium uppercase tracking-widest text-[#8896A8]">
               {section.heading}
@@ -102,6 +110,25 @@ export function Sidebar({
           </div>
         ))}
       </nav>
+
+      {me && (
+        <div className="flex items-center gap-2 border-t border-sidebar-border px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">{me.name || me.email}</p>
+            <p className="text-xs capitalize text-[#8896A8]">{me.role}</p>
+          </div>
+          {signOut && (
+            <a
+              href="/cdn-cgi/access/logout"
+              className="rounded-md p-1.5 hover:bg-sidebar-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+            </a>
+          )}
+        </div>
+      )}
     </aside>
   );
 }

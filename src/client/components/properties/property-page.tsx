@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { FinancialsCard } from "./financials-card";
+import { isStaff } from "@/lib/permissions";
 import { PropertyDialog } from "./property-dialog";
 import { UnitDialog } from "./unit-dialog";
 import { WorkOrderDialog } from "../maintenance/work-order-dialog";
@@ -31,6 +32,7 @@ const STATUS_TONE: Record<string, string> = {
 
 export function PropertyPage({ id, navigate }: { id: number; navigate: (to: string) => void }) {
   const app = useApp();
+  const staff = !!app.me && isStaff(app.me.role);
   const [property, setProperty] = useState<Property | null>(null);
   const [units, setUnits] = useState<Unit[]>([]);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
@@ -134,9 +136,11 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
               )}
             </div>
           </div>
-          <Button variant="outline" onClick={() => setEditingProperty(true)}>
-            <Pencil className="mr-1 h-4 w-4" /> Edit property
-          </Button>
+          {staff && (
+            <Button variant="outline" onClick={() => setEditingProperty(true)}>
+              <Pencil className="mr-1 h-4 w-4" /> Edit property
+            </Button>
+          )}
         </header>
 
         <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -146,14 +150,16 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
           <SummaryCard label="Open work orders" value={String(openWorkOrders.length)} tone={openWorkOrders.length > 0 ? "warn" : "default"} />
         </section>
 
-        <FinancialsCard propertyId={property.id} navigate={navigate} />
+        {staff && <FinancialsCard propertyId={property.id} navigate={navigate} />}
 
         <section>
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Units</h2>
-            <Button size="sm" onClick={() => { setEditingUnit(undefined); setUnitDialogOpen(true); }}>
-              <Plus className="mr-1 h-4 w-4" /> New unit
-            </Button>
+            {staff && (
+              <Button size="sm" onClick={() => { setEditingUnit(undefined); setUnitDialogOpen(true); }}>
+                <Plus className="mr-1 h-4 w-4" /> New unit
+              </Button>
+            )}
           </div>
           {units.length === 0 ? (
             <Card className="p-8 text-center text-sm text-muted-foreground">
@@ -162,7 +168,7 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
           ) : (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
               {units.map((u) => (
-                <Card key={u.id} className="cursor-pointer p-4 transition-shadow hover:shadow-md" onClick={() => { setEditingUnit(u); setUnitDialogOpen(true); }}>
+                <Card key={u.id} className={cn("p-4", staff && "cursor-pointer transition-shadow hover:shadow-md")} onClick={staff ? () => { setEditingUnit(u); setUnitDialogOpen(true); } : undefined}>
                   <div className="flex items-start justify-between">
                     <div>
                       <h3 className="font-semibold">{u.name}</h3>
