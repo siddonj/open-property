@@ -96,7 +96,11 @@ export function ActivityTab() {
         <ul className="divide-y">
           {rows.map((r) => {
             const href = activityHref(r);
-            const record = `${ENTITY_LABELS[r.entity] ?? r.entity}${r.label ? ` · ${r.label}` : r.entity_id ? ` #${r.entity_id}` : ""}`;
+            // Document rows are labelled with the file name, so name the record by id as well.
+            const kind = ENTITY_LABELS[r.entity] ?? r.entity;
+            const record = r.action.startsWith("document_")
+              ? `${kind} #${r.entity_id} · ${r.label}`
+              : `${kind}${r.label ? ` · ${r.label}` : r.entity_id ? ` #${r.entity_id}` : ""}`;
             return (
               <li key={r.id} className="grid gap-1 px-4 py-3 text-sm md:grid-cols-[11rem_1fr]">
                 <span className="text-xs text-muted-foreground">{formatAt(r.at)}</span>

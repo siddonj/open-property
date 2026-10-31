@@ -14,7 +14,6 @@ export const ENTITY_LABELS: Record<string, string> = {
   budget: "Budget",
   settings: "Settings",
   user: "User",
-  document: "Document",
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -31,6 +30,8 @@ const ACTION_LABELS: Record<string, string> = {
   checklist_item_add: "added a checklist item to",
   checklist_item_update: "updated a checklist item on",
   checklist_item_delete: "removed a checklist item from",
+  document_add: "added a document to",
+  document_delete: "deleted a document from",
 };
 
 export const actionLabel = (a: string) => ACTION_LABELS[a] ?? a.replace(/_/g, " ");

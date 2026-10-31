@@ -117,6 +117,7 @@ function expected(method, path) {
   if (["tenants", "leases", "checklists", "checklist-items", "rent-charges", "payments", "accounts", "bills",
     "bill-payments", "applications", "reports", "budgets"].includes(res)) return AM;
   if (res === "dashboard") return read ? AM : A;
+  if (res === "documents") return AMT; // narrowed by parent record in the handler; see the document checks
   return A; // users, activity, anything new
 }
 
@@ -196,12 +197,63 @@ await call("PUT", "/api/budgets", { as: MANAGER, body: { property_id: prop.id, y
 await logged("budget save, on its property", "budget", prop.id, MANAGER, "update");
 await call("DELETE", `/api/tenants/${tenant.id}`, { as: MANAGER });
 await logged("tenant delete", "tenant", tenant.id, MANAGER, "delete");
-const userRow = (await call("GET", `/api/activity?entity=user&limit=100`, { as: ADMIN })).data.activity.find((r) => r.label === TECH);
+const userRow = (await call("GET", `/api/activity?entity=user&limit=100`, { as: ADMIN })).data.activity.find((r) => r.label === TECH && r.action === "create");
 check("history: user created by admin", userRow?.user_email === ADMIN && userRow?.action === "create", JSON.stringify(userRow));
 
 check("manager can read one record's history", (await call("GET", `/api/activity?entity=property&entity_id=${prop.id}`, { as: MANAGER })).status === 200);
 check("manager can't browse all history", (await call("GET", "/api/activity", { as: MANAGER })).status === 403);
 check("maintenance can't read history", (await call("GET", `/api/activity?entity=work_order&entity_id=${wo.id}`, { as: TECH })).status === 403);
+
+// ── Documents (spec D) ─────────────────────────────────────────────
+
+async function upload(as, entity, id, bytes, type, name = "file") {
+  const form = new FormData();
+  form.set("entity", entity);
+  form.set("entity_id", String(id));
+  form.set("file", new Blob([bytes], { type }), name);
+  const r = await fetch(`${BASE}/api/documents`, { method: "POST", headers: { "Cf-Access-Jwt-Assertion": token(as) }, body: form });
+  return { status: r.status, data: await r.json().catch(() => null) };
+}
+const PDF = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+const HTML = Buffer.from("<html><script>alert(1)</script></html>");
+
+const leaseDoc = await upload(MANAGER, "lease", lease.id, PDF, "application/pdf", "signed lease.pdf");
+check("manager uploads a PDF to a lease", leaseDoc.status === 201, JSON.stringify(leaseDoc));
+const leaseDocId = leaseDoc.data?.document?.id;
+const file = await fetch(`${BASE}/api/documents/${leaseDocId}/file`, { headers: { "Cf-Access-Jwt-Assertion": token(MANAGER) } });
+const body = Buffer.from(await file.arrayBuffer());
+check("file comes back byte-for-byte with safe headers",
+  file.status === 200 && body.equals(PDF) && file.headers.get("content-type") === "application/pdf"
+  && file.headers.get("x-content-type-options") === "nosniff" && file.headers.get("content-security-policy") === "sandbox",
+  `${file.status} ${[...file.headers].join(" ")}`);
+check("upload shows in the lease's history", (await lastActivity("lease", lease.id))?.action === "document_add");
+check("renamed HTML as PDF → 415", (await upload(MANAGER, "lease", lease.id, HTML, "application/pdf", "x.pdf")).status === 415);
+check("SVG → 415", (await upload(MANAGER, "lease", lease.id, Buffer.from("<svg/>"), "image/svg+xml", "x.svg")).status === 415);
+check("over 10 MB → 413", (await upload(MANAGER, "lease", lease.id, Buffer.alloc(11 * 1024 * 1024, 0x25), "application/pdf", "big.pdf")).status === 413);
+check("missing parent → 404", (await upload(MANAGER, "lease", 999999, PDF, "application/pdf")).status === 404);
+
+check("maintenance can't open a lease document by id", (await call("GET", `/api/documents/${leaseDocId}/file`, { as: TECH })).status === 403);
+check("maintenance can't list lease documents", (await call("GET", `/api/documents?entity=lease&entity_id=${lease.id}`, { as: TECH })).status === 403);
+check("maintenance can't upload to a lease", (await upload(TECH, "lease", lease.id, PDF, "application/pdf")).status === 403);
+const woDoc = await upload(TECH, "work_order", wo.id, PNG, "image/png", "leak.png");
+check("maintenance uploads a photo to a work order", woDoc.status === 201, JSON.stringify(woDoc));
+check("maintenance lists work-order documents",
+  (await call("GET", `/api/documents?entity=work_order&entity_id=${wo.id}`, { as: TECH })).data?.documents?.length === 1);
+check("maintenance can't delete a document", (await call("DELETE", `/api/documents/${woDoc.data?.document?.id}`, { as: TECH })).status === 403);
+
+const tenant2 = await make("/api/tenants", MANAGER, { first_name: "Doc", last_name: "Holder" }, "tenant");
+await upload(MANAGER, "tenant", tenant2.id, PDF, "application/pdf", "id.pdf");
+await upload(MANAGER, "bill", bill.id, PDF, "application/pdf", "receipt.pdf");
+check("delete lease with documents → 409", (await call("DELETE", `/api/leases/${lease.id}`, { as: MANAGER })).status === 409);
+check("delete unit whose lease has documents → 409", (await call("DELETE", `/api/units/${unit.id}`, { as: MANAGER })).status === 409);
+check("delete property whose lease has documents → 409", (await call("DELETE", `/api/properties/${prop.id}`, { as: MANAGER })).status === 409);
+check("delete tenant with documents → 409", (await call("DELETE", `/api/tenants/${tenant2.id}`, { as: MANAGER })).status === 409);
+check("delete work order with documents → 409", (await call("DELETE", `/api/work-orders/${wo.id}`, { as: MANAGER })).status === 409);
+check("delete bill with documents → 409", (await call("DELETE", `/api/bills/${bill.id}`, { as: MANAGER })).status === 409);
+
+check("manager deletes a document", (await call("DELETE", `/api/documents/${leaseDocId}`, { as: MANAGER })).status === 200);
+check("deleted document is gone", (await call("GET", `/api/documents/${leaseDocId}/file`, { as: MANAGER })).status === 404);
 
 jwks.close();
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");

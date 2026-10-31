@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Textarea } from "@/components/ui/textarea";
 import type { Account, Bill, NewBill, Unit } from "@/types";
 import { HistoryList } from "@/components/documents/history-list";
+import { DocumentsPanel } from "@/components/documents/documents-panel";
 
 interface Props {
   open: boolean;
@@ -55,6 +56,7 @@ let nextKey = 1;
 
 export function BillDialog({ open, onOpenChange, bill, accounts, prefill, onSaved }: Props) {
   const app = useApp();
+  const [historyVersion, setHistoryVersion] = useState(0);
   const [current, setCurrent] = useState<Bill | undefined>(bill);
   const [units, setUnits] = useState<Unit[]>([]);
   const [propertyId, setPropertyId] = useState("");
@@ -293,7 +295,8 @@ export function BillDialog({ open, onOpenChange, bill, accounts, prefill, onSave
             {formError}
           </p>
         )}
-        {bill && <HistoryList entity="bill" entityId={bill.id} />}
+        {bill && <DocumentsPanel entity="bill" entityId={bill.id} onChange={() => setHistoryVersion((v) => v + 1)} />}
+        {bill && <HistoryList entity="bill" entityId={bill.id} version={historyVersion} />}
         <DialogFooter className="mt-2">
           {current && current.payments.length === 0 && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>

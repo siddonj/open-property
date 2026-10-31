@@ -36,6 +36,8 @@ import type {
   AppUser,
   Role,
   ActivityRow,
+  DocEntity,
+  DocumentRow,
 } from "../types";
 
 /** Why the app can't load: not signed in (401) or signed in without an account (403). */
@@ -158,6 +160,29 @@ export function useAppState() {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(filter)) if (v !== undefined && v !== "") qs.set(k, String(v));
     return api<{ activity: ActivityRow[]; next_before: number | null }>("GET", `/api/activity?${qs.toString()}`);
+  }, []);
+
+  // Documents ──────────────────────────────────────────────────────
+
+  const listDocuments = useCallback(async (entity: DocEntity, entityId: number) => {
+    const data = await api<{ documents: DocumentRow[] }>("GET", `/api/documents?entity=${entity}&entity_id=${entityId}`);
+    return data.documents;
+  }, []);
+
+  // Multipart, so not the JSON api() helper.
+  const uploadDocument = useCallback(async (entity: DocEntity, entityId: number, file: File) => {
+    const form = new FormData();
+    form.set("entity", entity);
+    form.set("entity_id", String(entityId));
+    form.set("file", file);
+    const r = await fetch("/api/documents", { method: "POST", body: form });
+    const data = (await r.json().catch(() => null)) as { document?: DocumentRow; error?: string } | null;
+    if (!r.ok || !data?.document) throw new Error(data?.error ?? `${r.status} ${r.statusText}`);
+    return data.document;
+  }, []);
+
+  const deleteDocument = useCallback(async (id: number) => {
+    await api("DELETE", `/api/documents/${id}`);
   }, []);
 
   // Property mutations ─────────────────────────────────────────────
@@ -497,6 +522,7 @@ export function useAppState() {
     // signed-in user
     me, signOut, authProblem,
     listUsers, createUser, updateUser, listActivity,
+    listDocuments, uploadDocument, deleteDocument,
     // refresh
     refreshLookups,
     // settings

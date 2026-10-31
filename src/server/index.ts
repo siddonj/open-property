@@ -90,6 +90,7 @@ const ACCESS: [method: string, pattern: string, roles: Role[]][] = [
   ["*", "/api/reports*", AM],
   ["*", "/api/budgets*", AM],
   ["GET", "/api/activity", AM], // managers: one record's history only (checked in the handler)
+  ["*", "/api/documents*", AMT], // narrowed by parent record in the handlers (spec D3)
 ];
 const ACCESS_RULES = ACCESS.map(([method, pattern, roles]) => ({
   method,
@@ -310,6 +311,7 @@ app.put("/api/properties/:id", async (c) => {
 app.delete("/api/properties/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  if (await hasDocuments("property", id)) return c.json({ error: "Its leases have documents. Delete them first." }, 409);
   if (await hasRentHistory("u.property_id", id)) {
     return c.json({ error: "This property has rent history, so it can't be deleted. End or cancel its leases instead." }, 409);
   }
@@ -401,6 +403,7 @@ app.put("/api/units/:id", async (c) => {
 app.delete("/api/units/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  if (await hasDocuments("unit", id)) return c.json({ error: "Its leases have documents. Delete them first." }, 409);
   if (await hasRentHistory("u.id", id)) {
     return c.json({ error: "This unit has rent history, so it can't be deleted. End or cancel its leases instead." }, 409);
   }
@@ -498,6 +501,7 @@ app.put("/api/tenants/:id", async (c) => {
 app.delete("/api/tenants/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  if (await hasDocuments("tenant", id)) return c.json({ error: HAS_DOCUMENTS }, 409);
   const before = await get<Record<string, unknown>>("SELECT first_name, last_name FROM tenants WHERE id = ?", [id]);
   const r = await run("DELETE FROM tenants WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
@@ -645,6 +649,7 @@ app.put("/api/leases/:id", async (c) => {
 app.delete("/api/leases/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  if (await hasDocuments("lease", id)) return c.json({ error: HAS_DOCUMENTS }, 409);
   const lease = await get<{ unit_id: number }>("SELECT unit_id FROM leases WHERE id = ?", [id]);
   if (!lease) return c.json({ error: "Not found" }, 404);
   if (await hasRentHistory("l.id", id)) {
@@ -1159,6 +1164,7 @@ app.put("/api/work-orders/:id", async (c) => {
 app.delete("/api/work-orders/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  if (await hasDocuments("work_order", id)) return c.json({ error: HAS_DOCUMENTS }, 409);
   const before = await get<Record<string, unknown>>("SELECT title FROM work_orders WHERE id = ?", [id]);
   const r = await run("DELETE FROM work_orders WHERE id = ?", [id]);
   if (!r.changes) return c.json({ error: "Not found" }, 404);
@@ -1583,6 +1589,7 @@ app.put("/api/bills/:id", async (c) => {
 app.delete("/api/bills/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
+  if (await hasDocuments("bill", id)) return c.json({ error: HAS_DOCUMENTS }, 409);
   // Voided payments count too: payment history is never deleted.
   if (await get("SELECT 1 FROM bill_payments WHERE bill_id = ?", [id])) {
     return c.json({ error: "This bill has payment records, so it can't be deleted" }, 409);
@@ -2333,6 +2340,135 @@ app.put("/api/users/:id", async (c) => {
   await logActivity(c, "user", id, "update", existing.email, diff(existing, p));
   const user = await get(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [id]);
   return c.json({ user });
+});
+
+// ── Documents (Phase 5) ────────────────────────────────────────────
+
+const DOC_TABLES = { lease: "leases", tenant: "tenants", work_order: "work_orders", bill: "bills" } as const;
+type DocEntity = keyof typeof DOC_TABLES;
+const isDocEntity = (e: unknown): e is DocEntity => typeof e === "string" && e in DOC_TABLES;
+const MAX_DOC_BYTES = 10 * 1024 * 1024;
+
+const ascii = (b: Uint8Array, from: number, to: number) => String.fromCharCode(...b.slice(from, to));
+// Allowed types, each checked against the file's first bytes (spec D2), so a renamed HTML or SVG
+// file can't be stored as a "PDF" and later rendered.
+const DOC_TYPES: Record<string, (b: Uint8Array) => boolean> = {
+  "application/pdf": (b) => ascii(b, 0, 5) === "%PDF-",
+  "image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  "image/png": (b) => [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((v, i) => b[i] === v),
+  "image/webp": (b) => ascii(b, 0, 4) === "RIFF" && ascii(b, 8, 12) === "WEBP",
+};
+
+// Spec D3: maintenance only on work orders, and never deletes.
+function canUseDocs(role: Role, entity: string, action: "read" | "delete" = "read"): boolean {
+  if (role === "maintenance") return action === "read" && entity === "work_order";
+  return true;
+}
+
+// Spec D4: refuse deletes that would leave documents behind. Properties and units cascade to
+// their leases, so those check the leases' documents.
+async function hasDocuments(scope: "property" | "unit" | DocEntity, id: number): Promise<boolean> {
+  if (scope === "property" || scope === "unit") {
+    const col = scope === "property" ? "u.property_id" : "u.id";
+    return !!(await get(
+      `SELECT 1 FROM documents d JOIN leases l ON d.entity = 'lease' AND d.entity_id = l.id
+       JOIN units u ON u.id = l.unit_id WHERE ${col} = ? LIMIT 1`,
+      [id],
+    ));
+  }
+  return !!(await get("SELECT 1 FROM documents WHERE entity = ? AND entity_id = ? LIMIT 1", [scope, id]));
+}
+const HAS_DOCUMENTS = "Delete its documents first.";
+
+const DOC_COLS = `d.id, d.entity, d.entity_id, d.filename, d.content_type, d.size, d.uploaded_at,
+  u.name as uploaded_by_name, u.email as uploaded_by_email`;
+
+app.get("/api/documents", async (c) => {
+  const entity = c.req.query("entity");
+  const entityId = intParam(c.req.query("entity_id"));
+  if (!isDocEntity(entity) || !entityId) return c.json({ error: "entity and entity_id required" }, 400);
+  if (!canUseDocs(c.get("user").role, entity)) return c.json({ error: "You don't have access to this." }, 403);
+  const documents = await query(
+    `SELECT ${DOC_COLS} FROM documents d JOIN users u ON u.id = d.uploaded_by
+     WHERE d.entity = ? AND d.entity_id = ? ORDER BY d.id DESC`,
+    [entity, entityId],
+  );
+  return c.json({ documents });
+});
+
+app.post("/api/documents", async (c) => {
+  // Reject an oversized body before reading it; the file size is checked again below because
+  // Content-Length can be missing.
+  if (Number(c.req.header("content-length") ?? 0) > MAX_DOC_BYTES + 512 * 1024) {
+    return c.json({ error: "Files can be up to 10 MB." }, 413);
+  }
+  const form = await c.req.parseBody().catch(() => null);
+  if (!form) return c.json({ error: "Expected a file upload" }, 400);
+  const { entity, file } = form;
+  const entityId = intParam(typeof form.entity_id === "string" ? form.entity_id : undefined);
+  if (!isDocEntity(entity) || !entityId) return c.json({ error: "entity and entity_id required" }, 400);
+  if (!canUseDocs(c.get("user").role, entity)) return c.json({ error: "You don't have access to this." }, 403);
+  if (!(file instanceof File) || file.size === 0) return c.json({ error: "Choose a file to upload." }, 400);
+  if (file.size > MAX_DOC_BYTES) return c.json({ error: "Files can be up to 10 MB." }, 413);
+  if (!(await get(`SELECT 1 FROM ${DOC_TABLES[entity]} WHERE id = ?`, [entityId]))) {
+    return c.json({ error: "Record not found" }, 404);
+  }
+  const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  const matches = DOC_TYPES[file.type];
+  if (!matches || !matches(head)) return c.json({ error: "Only PDF, JPEG, PNG and WebP files can be uploaded." }, 415);
+
+  const filename = file.name.replace(/[\\/\x00-\x1f\x7f"]/g, "_").slice(-200) || "document";
+  const key = `docs/${entity}/${entityId}/${crypto.randomUUID()}`;
+  await c.env.DOCS.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: file.type } });
+  let id: number;
+  try {
+    const r = await run(
+      "INSERT INTO documents (entity, entity_id, r2_key, filename, content_type, size, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [entity, entityId, key, filename, file.type, file.size, c.get("user").id],
+    );
+    id = Number(r.lastInsertRowid);
+  } catch (err) {
+    await c.env.DOCS.delete(key); // no row, so don't keep the file
+    throw err;
+  }
+  await logActivity(c, entity, entityId, "document_add", filename);
+  const document = await get(`SELECT ${DOC_COLS} FROM documents d JOIN users u ON u.id = d.uploaded_by WHERE d.id = ?`, [id]);
+  return c.json({ document }, 201);
+});
+
+type DocRow = { id: number; entity: DocEntity; entity_id: number; r2_key: string; filename: string; content_type: string };
+
+app.get("/api/documents/:id/file", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const doc = await get<DocRow>("SELECT * FROM documents WHERE id = ?", [id]);
+  if (!doc) return c.json({ error: "Not found" }, 404);
+  if (!canUseDocs(c.get("user").role, doc.entity)) return c.json({ error: "You don't have access to this." }, 403);
+  const obj = await c.env.DOCS.get(doc.r2_key);
+  if (!obj) return c.json({ error: "The file is missing from storage." }, 404);
+  const fallback = doc.filename.replace(/[^\x20-\x7e]/g, "_");
+  return new Response(obj.body, {
+    headers: {
+      "Content-Type": doc.content_type,
+      "Content-Disposition": `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(doc.filename)}`,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "sandbox",
+      "Cache-Control": "private, no-store",
+    },
+  });
+});
+
+app.delete("/api/documents/:id", async (c) => {
+  const id = intParam(c.req.param("id"));
+  if (!id) return c.json({ error: "Invalid ID" }, 400);
+  const doc = await get<DocRow>("SELECT * FROM documents WHERE id = ?", [id]);
+  if (!doc) return c.json({ error: "Not found" }, 404);
+  if (!canUseDocs(c.get("user").role, doc.entity, "delete")) return c.json({ error: "You don't have access to this." }, 403);
+  // File first: if R2 fails the row stays, so the delete can be retried and nothing is orphaned.
+  await c.env.DOCS.delete(doc.r2_key);
+  await run("DELETE FROM documents WHERE id = ?", [id]);
+  await logActivity(c, doc.entity, doc.entity_id, "document_delete", doc.filename);
+  return c.json({ ok: true });
 });
 
 // ── Activity (Phase 5) ─────────────────────────────────────────────
