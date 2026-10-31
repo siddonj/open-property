@@ -202,6 +202,8 @@ check("history: user created by admin", userRow?.user_email === ADMIN && userRow
 
 check("manager can read one record's history", (await call("GET", `/api/activity?entity=property&entity_id=${prop.id}`, { as: MANAGER })).status === 200);
 check("manager can't browse all history", (await call("GET", "/api/activity", { as: MANAGER })).status === 403);
+check("manager can't read user history", (await call("GET", `/api/activity?entity=user&entity_id=1`, { as: MANAGER })).status === 403);
+check("manager can't read settings history", (await call("GET", `/api/activity?entity=settings&entity_id=1`, { as: MANAGER })).status === 403);
 check("maintenance can't read history", (await call("GET", `/api/activity?entity=work_order&entity_id=${wo.id}`, { as: TECH })).status === 403);
 
 // ── Documents (spec D) ─────────────────────────────────────────────
@@ -229,6 +231,7 @@ check("file comes back byte-for-byte with safe headers",
   `${file.status} ${[...file.headers].join(" ")}`);
 check("upload shows in the lease's history", (await lastActivity("lease", lease.id))?.action === "document_add");
 check("renamed HTML as PDF → 415", (await upload(MANAGER, "lease", lease.id, HTML, "application/pdf", "x.pdf")).status === 415);
+check("prototype key as type → 415", (await upload(MANAGER, "lease", lease.id, HTML, "constructor", "x.html")).status === 415);
 check("SVG → 415", (await upload(MANAGER, "lease", lease.id, Buffer.from("<svg/>"), "image/svg+xml", "x.svg")).status === 415);
 check("over 10 MB → 413", (await upload(MANAGER, "lease", lease.id, Buffer.alloc(11 * 1024 * 1024, 0x25), "application/pdf", "big.pdf")).status === 413);
 check("missing parent → 404", (await upload(MANAGER, "lease", 999999, PDF, "application/pdf")).status === 404);
@@ -252,6 +255,10 @@ check("delete tenant with documents → 409", (await call("DELETE", `/api/tenant
 check("delete work order with documents → 409", (await call("DELETE", `/api/work-orders/${wo.id}`, { as: MANAGER })).status === 409);
 check("delete bill with documents → 409", (await call("DELETE", `/api/bills/${bill.id}`, { as: MANAGER })).status === 409);
 
+await call("PUT", `/api/leases/${lease.id}`, { as: MANAGER, body: { primary_tenant_id: tenant2.id } });
+check("maintenance doesn't see tenant names on units",
+  (await call("GET", `/api/units/${unit.id}`, { as: TECH })).data?.unit?.active_tenant_name === null
+  && (await call("GET", `/api/units/${unit.id}`, { as: MANAGER })).data?.unit?.active_tenant_name === "Doc Holder");
 check("manager deletes a document", (await call("DELETE", `/api/documents/${leaseDocId}`, { as: MANAGER })).status === 200);
 check("deleted document is gone", (await call("GET", `/api/documents/${leaseDocId}/file`, { as: MANAGER })).status === 404);
 

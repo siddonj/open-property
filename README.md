@@ -2,13 +2,11 @@
 
 # ResiQ Property
 
-[![Deploy with Clawnify](https://app.clawnify.com/deploy-button.svg)](https://app.clawnify.com/deploy?repo=clawnify/open-property)
-
 **ResiQ Property management software** — a self-hosted, cloud-based alternative to TenantCloud, AppFolio, Buildium, and Propertyware for landlords, small property managers, and apartment / multi-family back-office teams.
 
 Rental property management with everything you need to run a portfolio: properties and units, tenants and leases, rent collection and a ledger, maintenance work orders, and a vendor directory.
 
-> Built on the [Clawnify](https://clawnify.com) template format. Deploy your own copy in minutes, customize freely, own the data.
+> Self-hosted on your own Cloudflare account (Workers, D1, R2) with Wrangler. Customize freely, own the data.
 
 ## Features
 
@@ -70,6 +68,13 @@ Rental property management with everything you need to run a portfolio: properti
 - **Budget** — annual amounts per property and account, edited inline, with actual, variance, and percent used
 - CSV export on each report
 
+### Team, history & documents
+- **Sign-in through Cloudflare Access** (email code, Google, or Microsoft). The app stores no passwords; it checks Access's signed token on every API request and refuses everything when sign-in isn't configured
+- **Three roles**, enforced by the API: **Admin** (everything, including users and settings), **Manager** (all day-to-day work, including money), **Maintenance** (work orders, recurring tasks, vendors, and read-only properties; no rent, tenants, leases, bills, reports, or applications). Any new API route is admin-only until it's given a role
+- **Users** (Settings → Users, admins): add people by email, change roles, deactivate. Users are never deleted, and there's always at least one active admin
+- **Activity history**: every change records who, when, and which fields changed (old → new). Admins browse it in Settings → Activity; admins and managers see a History list on leases, tenants, work orders, and bills. History can't be edited or deleted, even in SQL
+- **Documents** on leases, tenants, work orders, and bills: PDF, JPEG, PNG, or WebP up to 10 MB, checked by content. Files live in a private R2 bucket and open only through the API, for users whose role can see the record. Maintenance can add photos to work orders. Records with documents can't be deleted until the documents are
+
 ### Vendors & policy
 - Vendor directory by category (plumber / electrician / HVAC / handyman / cleaning / landscaping / general)
 - Rent policy defaults: due day, late fee, grace days, currency
@@ -88,9 +93,19 @@ Rental property management with everything you need to run a portfolio: properti
 
 ```bash
 pnpm install
+cp .dev.vars.example .dev.vars   # then put your email in both lines
 pnpm dev          # Vite at :5173, Wrangler at :8787 (D1 schema applied automatically)
 pnpm typecheck
 pnpm build
+```
+
+**Local sign-in.** Without `.dev.vars` every API call returns 401 and the app shows "Sign-in required". `AUTH_DEV_USER` signs you in as that email, but only on `localhost` and only when Cloudflare Access isn't configured; `ADMIN_EMAIL` makes that email the first admin. To try another role, add a user in Settings → Users and change `AUTH_DEV_USER` to their email (restart `pnpm dev`).
+
+**Checking auth and access.** `scripts/check-auth.mjs` signs test tokens with a local key and checks sign-in, every route for every role, activity history, and documents. Run it against a throwaway local database (it creates records):
+
+```bash
+wrangler dev --port 8812 --var ACCESS_TEAM_DOMAIN:http://127.0.0.1:8899 --var ACCESS_AUD:check-aud --var ADMIN_EMAIL:admin@check.test
+node scripts/check-auth.mjs http://127.0.0.1:8812
 ```
 
 The dev script applies `src/server/schema.sql` (the baseline schema) and then any pending migrations in `migrations/` to the local D1 database, then runs Vite and Wrangler in parallel. The schema seeds 3 sample properties, 5 units, and 3 vendors so the app is usable on first boot.
@@ -101,20 +116,43 @@ For the repository's Claude Code AI-native SDLC workflow and change templates, s
 
 ## Deploy
 
-If you have the Clawnify CLI installed:
+One Cloudflare Worker serves both the built app (`dist`, via `[assets]` in `wrangler.toml`) and the API (`/api/*`). You need a Cloudflare account and Wrangler logged in (`wrangler login`).
+
+**1. Create the database and file bucket** (first deploy only):
 
 ```bash
-clawnify deploy
+wrangler d1 create open-property-db      # copy the database_id it prints into wrangler.toml
+wrangler r2 bucket create open-property-docs
 ```
 
-Or wire it up to Cloudflare Workers + D1 directly using the bindings in `wrangler.toml` (binding `DB`, database name `open-property-db`).
+**2. Set up Cloudflare Access** (Zero Trust dashboard → Access → Applications → Add a self-hosted application):
 
-After deploying, apply the baseline schema and migrations to the remote database. When upgrading an existing deployment, apply new migrations **before** deploying the new code — the API reads new tables (for example, work orders read `bill_lines`) and fails until they exist:
+- Application domain: your Worker's hostname (custom domain or `*.workers.dev`).
+- Add a policy that allows the people who should sign in (for example their emails, or your email domain).
+- Copy the application's **Application Audience (AUD) tag**, and note your team domain (`https://<team>.cloudflareaccess.com`).
+
+Access must cover the whole hostname. The app only checks the token Access adds; a request that skips Access has no token and gets 401.
+
+**3. Set the Worker's variables** (dashboard → the Worker → Settings → Variables, or `[vars]` in a private copy of `wrangler.toml`):
+
+| Variable | Value |
+|---|---|
+| `ACCESS_TEAM_DOMAIN` | `https://<team>.cloudflareaccess.com` |
+| `ACCESS_AUD` | the Application Audience tag |
+| `ADMIN_EMAIL` | the first admin's email (they add everyone else in Settings → Users) |
+
+Never set `AUTH_DEV_USER` on a deployed Worker. It's ignored off `localhost` and whenever Access is configured, but it doesn't belong there.
+
+**4. Apply the schema, then build and deploy:**
 
 ```bash
-wrangler d1 execute open-property-db --remote --file=src/server/schema.sql
+wrangler d1 execute open-property-db --remote --file=src/server/schema.sql   # first deploy only
 wrangler d1 migrations apply open-property-db --remote
+pnpm build
+wrangler deploy
 ```
+
+**Upgrading.** Apply new migrations **before** deploying the new code — the API reads new tables (for example, sign-in reads `users`) and fails until they exist. Upgrading to the Phase 5 release also needs steps 1 (the R2 bucket), 2 and 3 first: until `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are set, the deployed app refuses every request.
 
 ## Project layout
 
@@ -137,10 +175,14 @@ migrations/         Numbered schema changes applied after the baseline
       maintenance/  Work orders board, work-order dialog, recurring tasks
       expenses/     Bills list + bill dialog
       reports/      Report tabs (rent roll, income, P&L, budget, ...)
-      settings/     Vendors + rent policy defaults
+      settings/     Vendors, rent policy, users, activity
+      documents/    Documents panel + record history list
       ui/           Vendored shadcn primitives
     hooks/          use-router, use-app-state
     lib/utils.ts    cn helper, color palette, date / money / period helpers
+    lib/permissions.ts  What each role is shown (the API enforces the same rules)
+scripts/
+  check-auth.mjs    Sign-in, role, history, and document checks against a local Worker
 ```
 
 ## What's intentionally not included

@@ -12,7 +12,9 @@ pnpm typecheck    # tsc --noEmit
 pnpm build        # vite build -> dist/
 ```
 
-There is no test suite and no lint script configured in `package.json`. `pnpm typecheck` is the only automated check — run it after any change.
+There is no test suite and no lint script configured in `package.json`. `pnpm typecheck` is the only automated check — run it after any change. `scripts/check-auth.mjs` is a manual check of sign-in, the role matrix, activity history, and documents against a throwaway local Worker (see README → Develop); run it after touching auth, routes, or the `ACCESS` table.
+
+Local dev needs `.dev.vars` (copy `.dev.vars.example`): without it every API call is 401 by design.
 
 `db:migrate` is idempotent and does not reset data (`CREATE TABLE IF NOT EXISTS`, guarded seeds, tracked migrations). To reset local data, delete `.wrangler/state` and re-run `pnpm db:migrate`.
 
@@ -29,7 +31,7 @@ There is no test suite and no lint script configured in `package.json`. `pnpm ty
 
 Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLite) database. In dev, Vite proxies `/api/*` to Wrangler on :8787 (see `vite.config.ts`); in production both are served by the same Worker.
 
-- `src/server/index.ts` — every API route lives in this one Hono file (~1,900 lines), organized in commented sections per entity (Properties, Units, Tenants, Leases, Lease checklists, Rent, Maintenance, Recurring tasks, Vendors, Applications, Accounts, Bills & payments, Dashboard, Settings, Reports, Budgets). New endpoints should follow the existing section, not create new files, unless the file grows unreasonably.
+- `src/server/index.ts` — every API route lives in this one Hono file (~2,500 lines), organized in commented sections: Auth and access, Activity history, then one per entity (Properties, Units, Tenants, Leases, Lease checklists, Rent, Maintenance, Recurring tasks, Vendors, Applications, Accounts, Bills & payments, Dashboard, Settings, Reports, Budgets, Users, Documents, Activity). New endpoints should follow the existing section, not create new files, unless the file grows unreasonably.
 - `src/server/db.ts` — re-exports `initDB`/`query`/`get`/`run` from `@clawnify/db`, the D1 adapter package. All DB access goes through these three functions; there is no ORM.
 - `src/server/schema.sql` — baseline schema + seed data (3 properties, 5 units, 3 vendors). Applied on every `pnpm dev` via `db:migrate`. Don't add columns here: `CREATE TABLE IF NOT EXISTS` can't alter existing databases.
 - `migrations/NNNN_<name>.sql` — schema changes after the baseline, applied once each by `wrangler d1 migrations apply` (tracked in `d1_migrations`). Remote databases need `wrangler d1 migrations apply open-property-db --remote`.
@@ -39,6 +41,14 @@ Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLit
 - `src/client/components/<domain>/` — one directory per feature (dashboard, properties, tenants, applications, leases, rent, maintenance, reports, settings), each with list/detail/dialog components colocated.
 - `src/client/components/ui/` — vendored shadcn/ui primitives (Radix-based). Treat as generated; prefer composing over editing unless fixing a real bug.
 - `src/client/lib/utils.ts` — `cn()` class helper plus shared color/date/money/period formatting helpers used across components.
+
+### Auth, roles, history (server, Phase 5)
+
+- Every `/api/*` route except `/api/health` goes through the auth middleware: a Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`, verified with `verifyWithJwks` against `ACCESS_TEAM_DOMAIN`/`ACCESS_AUD`), or `AUTH_DEV_USER` on localhost only, else 401. The email must be an active row in `users`; `ADMIN_EMAIL` bootstraps the first admin.
+- Roles come from the single `ACCESS` table near the top of `index.ts`. **A route not listed there is admin-only.** When adding a route, add its rule and update `expected()` in `scripts/check-auth.mjs` (it restates the spec independently). Record-level rules (managers reading one record's activity, documents by parent) live in the handlers.
+- Every write handler calls `logActivity(c, entity, id, action, label, diff(before, patch))` after its change. The `activity` table is append-only (SQLite triggers). Child records log on their parent (checklists on the lease, payments on the charge).
+- Documents: metadata in `documents`, files in the R2 `DOCS` binding under random keys, served only by `GET /api/documents/:id/file`. Deleting a record with documents is refused (`hasDocuments`).
+- Client: `lib/permissions.ts` (`canSeePage`, `isStaff`) only hides UI; never rely on it for security.
 
 ### API conventions (server)
 
@@ -61,7 +71,7 @@ Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLit
 
 ## Deployment
 
-Deploys as a Cloudflare Worker with a D1 binding (`DB` → database `open-property-db`, see `wrangler.toml`). Built on the Clawnify template format (`clawnify.json` defines deploy-time prompts); `clawnify deploy` handles provisioning if the Clawnify CLI is installed, otherwise wire Wrangler + D1 directly.
+Self-deployed with Wrangler (not Clawnify; `clawnify.json` is unused). One Worker serves the built SPA from `dist` (`[assets]`, SPA fallback, `/api/*` to the Worker first) plus the API, with bindings `DB` (D1 `open-property-db`) and `DOCS` (R2 `open-property-docs`). Production needs `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, and `ADMIN_EMAIL` set and a Cloudflare Access application in front; see README → Deploy. Apply migrations before deploying code.
 
 ## Scope boundaries
 

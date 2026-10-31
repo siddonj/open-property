@@ -350,6 +350,10 @@ const UNIT_SELECT = `
   LEFT JOIN properties p ON p.id = u.property_id
 `;
 
+// Maintenance can read units but not tenants (spec B2/B3), so drop the current tenant's name.
+const unitForRole = (c: Context<Env>, r: Record<string, unknown>) =>
+  c.get("user").role === "maintenance" ? { ...r, active_tenant_name: null } : r;
+
 app.get("/api/units", async (c) => {
   const propertyId = intParam(c.req.query("property_id"));
   const status = c.req.query("status");
@@ -358,16 +362,16 @@ app.get("/api/units", async (c) => {
   if (propertyId) { where.push("u.property_id = ?"); params.push(propertyId); }
   if (status) { where.push("u.status = ?"); params.push(status); }
   const sql = `${UNIT_SELECT}${where.length ? " WHERE " + where.join(" AND ") : ""} ORDER BY p.name, u.name`;
-  const rows = await query(sql, params);
-  return c.json({ units: rows });
+  const rows = await query<Record<string, unknown>>(sql, params);
+  return c.json({ units: rows.map((r) => unitForRole(c, r)) });
 });
 
 app.get("/api/units/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
-  const row = await get(`${UNIT_SELECT} WHERE u.id = ?`, [id]);
+  const row = await get<Record<string, unknown>>(`${UNIT_SELECT} WHERE u.id = ?`, [id]);
   if (!row) return c.json({ error: "Not found" }, 404);
-  return c.json({ unit: row });
+  return c.json({ unit: unitForRole(c, row) });
 });
 
 app.post("/api/units", async (c) => {
@@ -2336,7 +2340,12 @@ app.put("/api/users/:id", async (c) => {
   }
   const { sets, params } = buildUpdate({ name: p.name, role: p.role, active: p.active === undefined ? undefined : p.active ? 1 : 0 });
   if (!sets.length) return c.json({ error: "No fields" }, 400);
-  await run(`UPDATE users SET ${sets.join(", ")} WHERE id = ?`, [...params, id]);
+  const r = await run(
+    `UPDATE users SET ${sets.join(", ")} WHERE id = ?
+       AND (? = 0 OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?) >= 1)`,
+    [...params, id, losesAdmin ? 1 : 0, id],
+  );
+  if (!r.changes) return c.json({ error: "There must be at least one active admin." }, 409);
   await logActivity(c, "user", id, "update", existing.email, diff(existing, p));
   const user = await get(`SELECT ${USER_COLS} FROM users WHERE id = ?`, [id]);
   return c.json({ user });
@@ -2399,7 +2408,7 @@ app.get("/api/documents", async (c) => {
 app.post("/api/documents", async (c) => {
   // Reject an oversized body before reading it; the file size is checked again below because
   // Content-Length can be missing.
-  if (Number(c.req.header("content-length") ?? 0) > MAX_DOC_BYTES + 512 * 1024) {
+  if (!(Number(c.req.header("content-length")) <= MAX_DOC_BYTES + 512 * 1024)) {
     return c.json({ error: "Files can be up to 10 MB." }, 413);
   }
   const form = await c.req.parseBody().catch(() => null);
@@ -2414,7 +2423,7 @@ app.post("/api/documents", async (c) => {
     return c.json({ error: "Record not found" }, 404);
   }
   const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
-  const matches = DOC_TYPES[file.type];
+  const matches = Object.hasOwn(DOC_TYPES, file.type) ? DOC_TYPES[file.type] : undefined;
   if (!matches || !matches(head)) return c.json({ error: "Only PDF, JPEG, PNG and WebP files can be uploaded." }, 415);
 
   const filename = file.name.replace(/[\\/\x00-\x1f\x7f"]/g, "_").slice(-200) || "document";
@@ -2450,7 +2459,7 @@ app.get("/api/documents/:id/file", async (c) => {
   return new Response(obj.body, {
     headers: {
       "Content-Type": doc.content_type,
-      "Content-Disposition": `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(doc.filename)}`,
+      "Content-Disposition": `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(doc.filename).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)}`,
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "sandbox",
       "Cache-Control": "private, no-store",
@@ -2473,12 +2482,16 @@ app.delete("/api/documents/:id", async (c) => {
 
 // ── Activity (Phase 5) ─────────────────────────────────────────────
 
+// Record types a manager may read one record's history for; users and settings stay admin-only.
+const MANAGER_HISTORY = new Set(["property", "unit", "tenant", "lease", "rent_charge", "vendor", "work_order",
+  "recurring_task", "bill", "application", "budget"]);
+
 // Spec C3. Admins can browse everything; managers only one record's history (entity + entity_id).
 // ponytail: from/to compare against UTC timestamps, so a day boundary can be off by the UTC offset.
 app.get("/api/activity", async (c) => {
   const entity = c.req.query("entity");
   const entityId = intParam(c.req.query("entity_id"));
-  if (c.get("user").role !== "admin" && !(entity && entityId)) {
+  if (c.get("user").role !== "admin" && !(entity && entityId && MANAGER_HISTORY.has(entity))) {
     return c.json({ error: "You don't have access to this." }, 403);
   }
   const where: string[] = [];
