@@ -244,3 +244,40 @@ Slice B deviations:
   ("total cents: — → 1234"), and update labels use the name from before
   the change.
 
+Slice C results, 2026-10-31 (scratch copy p5, a fresh D1 and local R2, Access mode):
+
+- `scripts/check-auth.mjs` passes 54 checks. The 22 new ones cover:
+  - a PDF uploaded to a lease comes back byte-for-byte, with
+    `nosniff` and `CSP: sandbox`
+  - the upload shows in the lease's history
+  - rejected uploads: a renamed HTML file sent as a PDF (415), an SVG (415),
+    11 MB (413), and a missing parent (404)
+  - maintenance gets 403 opening, listing, or uploading lease documents, can
+    upload and list work-order photos, and can't delete them (403)
+  - deleting a lease, unit, or property whose leases have documents gets
+    409, and so does deleting a tenant, work order, or bill with documents
+  - a manager can delete a document, and opening it afterwards gets 404
+  - the role matrix now covers 77 routes × 3 roles
+- Browser (manager): uploading through the lease dialog's Documents panel
+  lists the file, the link opens `/api/documents/:id/file` in a new tab,
+  and the History list refreshes with "added a document".
+- `tsc --noEmit` and `vite build` pass.
+- **Not verified:** how Chrome shows a PDF under `Content-Security-Policy:
+  sandbox`. The in-app browser treats PDFs as downloads. Some Chrome
+  versions refuse to render PDFs in a sandboxed document. If that happens,
+  drop `sandbox` for `application/pdf` only, keeping `nosniff` and the
+  magic-byte check, or switch PDFs to `attachment`.
+
+Slice C deviations:
+
+- **Document adds and deletes are logged on the parent record** (action
+  `document_add` / `document_delete`, labelled with the file name), not as a
+  separate `document` entity, so the record's History shows them.
+- **`/api/documents*` is open to all three roles in the access table.** The
+  handlers narrow it by parent record (D3). The check script's route
+  expectation matches, and the 22 document checks cover the parent rules.
+- **Deleting a property or unit is blocked when its leases have documents**,
+  with the message "Its leases have documents. Delete them first." Work
+  orders and bills don't cascade from properties (`SET NULL` and
+  `RESTRICT`), so only leases matter there.
+

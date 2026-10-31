@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { isStaff } from "@/lib/permissions";
 import type { Account, ApprovalStatus, Unit, WorkOrder, WorkOrderPriority, WorkOrderStatus } from "@/types";
 import { HistoryList } from "@/components/documents/history-list";
+import { DocumentsPanel } from "@/components/documents/documents-panel";
 
 interface Props {
   open: boolean;
@@ -38,6 +39,7 @@ const STATUSES: { value: WorkOrderStatus; label: string }[] = [
 
 export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSaved }: Props) {
   const app = useApp();
+  const [historyVersion, setHistoryVersion] = useState(0);
   const [units, setUnits] = useState<Unit[]>([]);
   const [propertyId, setPropertyId] = useState<number | "">("");
   const [unitId, setUnitId] = useState<number | "">("");
@@ -331,7 +333,8 @@ export function WorkOrderDialog({ open, onOpenChange, workOrder, defaults, onSav
             {formError}
           </p>
         )}
-        {workOrder && <HistoryList entity="work_order" entityId={workOrder.id} />}
+        {workOrder && <DocumentsPanel entity="work_order" entityId={workOrder.id} onChange={() => setHistoryVersion((v) => v + 1)} />}
+        {workOrder && <HistoryList entity="work_order" entityId={workOrder.id} version={historyVersion} />}
         <DialogFooter className="mt-2">
           {workOrder && staff && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>

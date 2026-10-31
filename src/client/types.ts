@@ -526,3 +526,17 @@ export interface ActivityRow {
   /** Updates only: field → [old, new]. */
   changes: Record<string, [unknown, unknown]> | null;
 }
+
+export type DocEntity = "lease" | "tenant" | "work_order" | "bill";
+
+export interface DocumentRow {
+  id: number;
+  entity: DocEntity;
+  entity_id: number;
+  filename: string;
+  content_type: string;
+  size: number;
+  uploaded_at: string;
+  uploaded_by_name: string;
+  uploaded_by_email: string;
+}

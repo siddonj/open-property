@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import type { Lease, LeaseStatus, Tenant, Unit } from "@/types";
 import { HistoryList } from "@/components/documents/history-list";
+import { DocumentsPanel } from "@/components/documents/documents-panel";
 
 interface Props {
   open: boolean;
@@ -32,6 +33,7 @@ const STATUSES: { value: LeaseStatus; label: string }[] = [
 
 export function LeaseDialog({ open, onOpenChange, lease, defaults, onSaved }: Props) {
   const app = useApp();
+  const [historyVersion, setHistoryVersion] = useState(0);
   const [units, setUnits] = useState<Unit[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
 
@@ -229,7 +231,8 @@ export function LeaseDialog({ open, onOpenChange, lease, defaults, onSaved }: Pr
             <Textarea id="l-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
           </div>
         </div>
-        {lease && <HistoryList entity="lease" entityId={lease.id} />}
+        {lease && <DocumentsPanel entity="lease" entityId={lease.id} onChange={() => setHistoryVersion((v) => v + 1)} />}
+        {lease && <HistoryList entity="lease" entityId={lease.id} version={historyVersion} />}
         <DialogFooter className="mt-2">
           {lease && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>

@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { Tenant } from "@/types";
 import { HistoryList } from "@/components/documents/history-list";
+import { DocumentsPanel } from "@/components/documents/documents-panel";
 
 interface Props {
   open: boolean;
@@ -19,6 +20,7 @@ interface Props {
 
 export function TenantDialog({ open, onOpenChange, tenant, defaults, onSaved }: Props) {
   const app = useApp();
+  const [historyVersion, setHistoryVersion] = useState(0);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -134,7 +136,8 @@ export function TenantDialog({ open, onOpenChange, tenant, defaults, onSaved }: 
             <Textarea id="t-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
           </div>
         </div>
-        {tenant && <HistoryList entity="tenant" entityId={tenant.id} />}
+        {tenant && <DocumentsPanel entity="tenant" entityId={tenant.id} onChange={() => setHistoryVersion((v) => v + 1)} />}
+        {tenant && <HistoryList entity="tenant" entityId={tenant.id} version={historyVersion} />}
         <DialogFooter className="mt-2">
           {tenant && (
             <Button type="button" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={remove}>
