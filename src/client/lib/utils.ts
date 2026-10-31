@@ -47,6 +47,25 @@ export function toIsoDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * Reads a dashboard deep-link parameter (e.g. `/leases?id=5`) once and removes it from the URL,
+ * so closing the dialog or reloading doesn't reopen the record. Returns null when absent.
+ */
+export function takeParam(name: string): string | null {
+  const url = new URL(window.location.href);
+  const value = url.searchParams.get(name);
+  if (value === null) return null;
+  url.searchParams.delete(name);
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  return value;
+}
+
+/** `takeParam` for a positive integer ID; anything else counts as absent. */
+export function takeIdParam(name: string): number | null {
+  const raw = takeParam(name);
+  return raw && /^\d{1,9}$/.test(raw) ? Number(raw) : null;
+}
+
 /** YYYY-MM for the current month. */
 export function currentPeriod(): string {
   return toIsoDate(new Date()).slice(0, 7);

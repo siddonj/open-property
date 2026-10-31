@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { FileText, Plus, Search, UserPlus } from "lucide-react";
 import { useApp } from "@/context";
-import { formatDate, formatMoney, toIsoDate } from "@/lib/utils";
+import { formatDate, formatMoney, takeIdParam, toIsoDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -45,15 +45,27 @@ export function ApplicationsPage({ navigate }: { navigate: (to: string) => void 
   async function load() {
     try {
       setLoading(true);
-      setApplications(await app.listApplications());
+      const list = await app.listApplications();
+      setApplications(list);
+      return list;
     } catch (err) {
       app.setError((err as Error).message);
+      return null;
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => {
+    // Dashboard deep link: /applications?id=N opens that application whatever the filter.
+    const linked = takeIdParam("id");
+    load().then((list) => {
+      if (!linked || !list) return;
+      const found = list.find((a) => a.id === linked);
+      if (found) { setEditing(found); setDialogOpen(true); } else app.setError("That application no longer exists.");
+    });
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
 
   const filtered = useMemo(() => {
     let out = applications;

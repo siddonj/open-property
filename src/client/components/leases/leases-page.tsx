@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ClipboardList, ListChecks, Plus, RefreshCw, Search } from "lucide-react";
 import { useApp } from "@/context";
-import { cn, daysBetween, formatDate, formatMoney, toIsoDate } from "@/lib/utils";
+import { cn, daysBetween, formatDate, formatMoney, takeIdParam, toIsoDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -62,14 +62,25 @@ export function LeasesPage({ navigate }: { navigate: (to: string) => void }) {
       setLoading(true);
       const list = await app.listLeases();
       setLeases(list);
+      return list;
     } catch (err) {
       app.setError((err as Error).message);
+      return null;
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => {
+    // Dashboard deep link: /leases?id=N opens that lease whatever the filter.
+    const linked = takeIdParam("id");
+    load().then((list) => {
+      if (!linked || !list) return;
+      const lease = list.find((l) => l.id === linked);
+      if (lease) { setEditing(lease); setDialogOpen(true); } else app.setError("That lease no longer exists.");
+    });
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
 
   const filtered = useMemo(() => {
     let out = leases;

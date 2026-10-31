@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Building2, MapPin, Pencil, Plus, Wrench } from "lucide-react";
 import { useApp } from "@/context";
 import { api } from "@/api";
-import { cn, colorClasses, daysBetween, formatDate, formatMoney, toIsoDate } from "@/lib/utils";
+import { cn, colorClasses, daysBetween, formatDate, formatMoney, takeIdParam, toIsoDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -47,22 +47,30 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
     try {
       setLoading(true);
       const [{ property: p }, ulist, wlist] = await Promise.all([
-        api<{ property: Property }>("GET", `/api/properties/${id}`),
+        api<{ property: Property }>("GET", `/api/properties/${id}?today=${toIsoDate(new Date())}`),
         app.listUnits(id),
         app.listWorkOrders({ property_id: id }),
       ]);
       setProperty(p);
       setUnits(ulist);
       setWorkOrders(wlist);
+      return ulist;
     } catch (err) {
       app.setError((err as Error).message);
+      return null;
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    load();
+    // Dashboard deep link: /properties/:id?unit=N opens that unit's dialog.
+    const linked = takeIdParam("unit");
+    load().then((list) => {
+      if (!linked || !list) return;
+      const unit = list.find((u) => u.id === linked);
+      if (unit) { setEditingUnit(unit); setUnitDialogOpen(true); } else app.setError("That unit no longer exists.");
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -83,7 +91,8 @@ export function PropertyPage({ id, navigate }: { id: number; navigate: (to: stri
   }
 
   const palette = colorClasses(property.color);
-  const occupied = units.filter((u) => u.status === "occupied").length;
+  // Leases decide occupancy (current month), same as the dashboard and occupancy report.
+  const occupied = property.occupied_count ?? 0;
   const totalRent = units.reduce((sum, u) => sum + (u.market_rent ?? 0), 0);
   const openWorkOrders = workOrders.filter((w) => w.status !== "completed" && w.status !== "cancelled");
   const today = toIsoDate(new Date());

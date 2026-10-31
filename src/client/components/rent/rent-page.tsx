@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Receipt, Sparkles } from "lucide-react";
 import { useApp } from "@/context";
-import { addMonths, cn, currentPeriod, formatDate, formatMoney, formatPeriod } from "@/lib/utils";
+import { addMonths, cn, currentPeriod, formatDate, formatMoney, formatPeriod, takeIdParam, takeParam } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -19,7 +19,12 @@ const STATUS_TONE: Record<ChargeStatus, string> = {
 
 export function RentPage() {
   const app = useApp();
-  const [period, setPeriod] = useState<string>(currentPeriod());
+  // A dashboard deep link (/rent?period=YYYY-MM&charge=N) sets the starting period; the
+  // effect below strips both parameters once the charge is opened.
+  const [period, setPeriod] = useState<string>(() => {
+    const linked = new URLSearchParams(window.location.search).get("period");
+    return linked && /^\d{4}-(0[1-9]|1[0-2])$/.test(linked) ? linked : currentPeriod();
+  });
   const [charges, setCharges] = useState<RentCharge[]>([]);
   const [loading, setLoading] = useState(true);
   const [paymentTarget, setPaymentTarget] = useState<RentCharge | null>(null);
@@ -30,14 +35,25 @@ export function RentPage() {
       setLoading(true);
       const list = await app.listCharges(period);
       setCharges(list);
+      return list;
     } catch (err) {
       app.setError((err as Error).message);
+      return null;
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [period]);
+  useEffect(() => {
+    takeParam("period");
+    const linked = takeIdParam("charge");
+    load().then((list) => {
+      if (!linked || !list) return;
+      const found = list.find((c) => c.id === linked);
+      if (found) setPaymentTarget(found); else app.setError("That rent charge no longer exists.");
+    });
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [period]);
 
   async function generate() {
     setGenerating(true);

@@ -51,6 +51,36 @@ function buildUpdate(fields: Record<string, unknown>): { sets: string[]; params:
   return { sets, params };
 }
 
+// The operator's local date from ?today= (PR #7), so "overdue" and "now" match what they see.
+// Falls back to the UTC date when absent or malformed.
+function requestToday(c: Context): string {
+  const q = c.req.query("today");
+  return q && DATE_RE.test(q) ? q : new Date().toISOString().slice(0, 10);
+}
+
+function monthBounds(period: string): { from: string; to: string } {
+  const [y, m] = period.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { from: `${period}-01`, to: `${period}-${String(last).padStart(2, "0")}` };
+}
+
+// The one occupancy rule (Phase 4, D1/D2): a non-cancelled lease covers [from, to] when it starts
+// by `to` and its effective end reaches `from`. An active lease past its end date is a holdover and
+// runs through `today`. Every occupied count goes through this.
+function leaseCovers(alias: string, from: string, to: string, today: string): { sql: string; params: string[] } {
+  return {
+    sql: `${alias}.status != 'cancelled' AND ${alias}.start_date <= ?
+      AND (${alias}.end_date >= ? OR (${alias}.status = 'active' AND ? >= ?))`,
+    params: [to, from, today, from],
+  };
+}
+
+// Correlated "is unit `u` occupied in [from, to]" for use inside a units query.
+function unitOccupied(from: string, to: string, today: string): { sql: string; params: string[] } {
+  const cover = leaseCovers("lc", from, to, today);
+  return { sql: `EXISTS (SELECT 1 FROM leases lc WHERE lc.unit_id = u.id AND ${cover.sql})`, params: cover.params };
+}
+
 // ── Properties ─────────────────────────────────────────────────────
 
 const PropertyInput = z.object({
@@ -65,20 +95,29 @@ const PropertyInput = z.object({
   color: z.string().optional(),
 });
 
+// Unit and occupied counts for the current month, matching the dashboard and occupancy report.
+function propertyCountsSql(c: Context): { sql: string; params: string[] } {
+  const today = requestToday(c);
+  const { from, to } = monthBounds(today.slice(0, 7));
+  const occ = unitOccupied(from, to, today);
+  return {
+    sql: `(SELECT COUNT(*) FROM units u WHERE u.property_id = p.id) as unit_count,
+       (SELECT COUNT(*) FROM units u WHERE u.property_id = p.id AND ${occ.sql}) as occupied_count`,
+    params: occ.params,
+  };
+}
+
 app.get("/api/properties", async (c) => {
-  const rows = await query(
-    `SELECT p.*,
-       (SELECT COUNT(*) FROM units u WHERE u.property_id = p.id) as unit_count,
-       (SELECT COUNT(*) FROM units u WHERE u.property_id = p.id AND u.status = 'occupied') as occupied_count
-     FROM properties p ORDER BY p.name`,
-  );
+  const counts = propertyCountsSql(c);
+  const rows = await query(`SELECT p.*, ${counts.sql} FROM properties p ORDER BY p.name`, counts.params);
   return c.json({ properties: rows });
 });
 
 app.get("/api/properties/:id", async (c) => {
   const id = intParam(c.req.param("id"));
   if (!id) return c.json({ error: "Invalid ID" }, 400);
-  const row = await get("SELECT * FROM properties WHERE id = ?", [id]);
+  const counts = propertyCountsSql(c);
+  const row = await get(`SELECT p.*, ${counts.sql} FROM properties p WHERE p.id = ?`, [...counts.params, id]);
   if (!row) return c.json({ error: "Not found" }, 404);
   return c.json({ property: row });
 });
@@ -1443,13 +1482,43 @@ const RENEWAL_WINDOW_END =
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// Fixed "upcoming" window for rent and maintenance alerts (spec D3).
+const DUE_SOON_DAYS = 7;
+
+type AttentionCharge = {
+  id: number; period: string; due_date: string; balance: number;
+  unit_name: string | null; property_name: string | null;
+  tenant_first_name: string | null; tenant_last_name: string | null;
+};
+// Same balance condition as the overdue total and the delinquency report.
+const ATTENTION_CHARGE_SQL = `SELECT rc.id, rc.period, rc.due_date, (rc.amount - rc.amount_paid) as balance,
+    u.name as unit_name, p.name as property_name,
+    t.first_name as tenant_first_name, t.last_name as tenant_last_name
+  FROM rent_charges rc
+  JOIN leases l ON l.id = rc.lease_id
+  LEFT JOIN units u ON u.id = l.unit_id
+  LEFT JOIN properties p ON p.id = u.property_id
+  LEFT JOIN tenants t ON t.id = l.primary_tenant_id
+  WHERE rc.status != 'waived' AND rc.amount_paid < rc.amount`;
+
+type AttentionWorkOrder = {
+  id: number; title: string; priority: string; status: string; scheduled_at: string;
+  property_name: string | null; unit_name: string | null;
+};
+const ATTENTION_WORK_ORDER_SQL = `SELECT w.id, w.title, w.priority, w.status, w.scheduled_at,
+    p.name as property_name, u.name as unit_name
+  FROM work_orders w
+  LEFT JOIN properties p ON p.id = w.property_id
+  LEFT JOIN units u ON u.id = w.unit_id
+  WHERE w.status NOT IN ('completed', 'cancelled')`;
+
 app.get("/api/dashboard/summary", async (c) => {
-  const today = new Date().toISOString().slice(0, 10);
-  // The client's local date, so "due today" / "expired" match what the operator sees.
-  // Falls back to the UTC date when absent or malformed.
-  const qToday = c.req.query("today");
-  const localToday = qToday && DATE_RE.test(qToday) ? qToday : today;
+  const localToday = requestToday(c);
   const periodNow = localToday.slice(0, 7);
+  const month = monthBounds(periodNow);
+  const occupiedNow = unitOccupied(month.from, month.to, localToday);
+  // Vacant now (D5): no lease covering today; unavailable units aren't for rent.
+  const occupiedToday = unitOccupied(localToday, localToday, localToday);
 
   const safeGet = <T,>(sql: string, params: unknown[] = [], fallback: T) =>
     get<T>(sql, params).catch(() => fallback as T | undefined).then((v) => v ?? fallback);
@@ -1468,17 +1537,27 @@ app.get("/api/dashboard/summary", async (c) => {
     overdueRow,
     openWorkOrders,
     urgentWorkOrders,
-    recentWorkOrders,
     upcomingExpirations,
     followupsDue,
     expiredLeases,
     renewalSetting,
     overdueWorkOrders,
+    overdueCharges,
+    dueSoonCharges,
+    dueSoonRow,
+    overdueWorkOrdersList,
+    scheduledWorkOrders,
+    scheduledRow,
+    vacantUnits,
+    leaseCounts,
   ] = await Promise.all([
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM properties", [], { n: 0 }),
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM units", [], { n: 0 }),
-    safeGet<{ n: number }>("SELECT COUNT(*) as n FROM units WHERE status = 'occupied'", [], { n: 0 }),
-    safeGet<{ n: number }>("SELECT COUNT(*) as n FROM units WHERE status = 'vacant'", [], { n: 0 }),
+    safeGet<{ n: number }>(`SELECT COUNT(*) as n FROM units u WHERE ${occupiedNow.sql}`, occupiedNow.params, { n: 0 }),
+    safeGet<{ n: number }>(
+      `SELECT COUNT(*) as n FROM units u WHERE u.status != 'unavailable' AND NOT ${occupiedToday.sql}`,
+      occupiedToday.params, { n: 0 },
+    ),
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM leases WHERE status = 'active'", [], { n: 0 }),
     safeGet<{ n: number }>(
       "SELECT COUNT(*) as n FROM leases WHERE status = 'active' AND end_date <= date(?, '+30 days')",
@@ -1503,17 +1582,6 @@ app.get("/api/dashboard/summary", async (c) => {
     safeGet<{ n: number }>(
       "SELECT COUNT(*) as n FROM work_orders WHERE priority = 'urgent' AND status NOT IN ('completed', 'cancelled')",
       [], { n: 0 },
-    ),
-    safeQuery<{ id: number; title: string; priority: string; status: string; scheduled_at: string | null; property_name: string | null; unit_name: string | null; created_at: string }>(
-      `SELECT w.id, w.title, w.priority, w.status, w.scheduled_at, p.name as property_name, u.name as unit_name, w.created_at
-       FROM work_orders w
-       LEFT JOIN properties p ON p.id = w.property_id
-       LEFT JOIN units u ON u.id = w.unit_id
-       WHERE w.status NOT IN ('completed', 'cancelled')
-       ORDER BY CASE WHEN substr(w.scheduled_at, 1, 10) < ? THEN 0 ELSE 1 END,
-         CASE w.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, w.created_at DESC
-       LIMIT 6`,
-      [localToday],
     ),
     safeQuery<{ id: number; end_date: string; tenant_first_name: string | null; tenant_last_name: string | null; unit_name: string | null; property_name: string | null }>(
       `SELECT l.id, l.end_date,
@@ -1554,6 +1622,52 @@ app.get("/api/dashboard/summary", async (c) => {
       "SELECT COUNT(*) as n FROM work_orders WHERE status NOT IN ('completed', 'cancelled') AND substr(scheduled_at, 1, 10) < ?",
       [localToday], { n: 0 },
     ),
+    // "Needs attention" (Phase 4, spec C): up to 6 rows each, with full counts alongside.
+    safeQuery<AttentionCharge>(
+      `${ATTENTION_CHARGE_SQL} AND rc.due_date < ? ORDER BY rc.due_date ASC, rc.id LIMIT 6`,
+      [localToday],
+    ),
+    safeQuery<AttentionCharge>(
+      `${ATTENTION_CHARGE_SQL} AND rc.due_date >= ? AND rc.due_date <= date(?, '+${DUE_SOON_DAYS} days')
+       ORDER BY rc.due_date ASC, rc.id LIMIT 6`,
+      [localToday, localToday],
+    ),
+    safeGet<{ total: number; n: number }>(
+      `SELECT COALESCE(SUM(amount - amount_paid), 0) as total, COUNT(*) as n FROM rent_charges
+       WHERE status != 'waived' AND amount_paid < amount AND due_date >= ? AND due_date <= date(?, '+${DUE_SOON_DAYS} days')`,
+      [localToday, localToday], { total: 0, n: 0 },
+    ),
+    safeQuery<AttentionWorkOrder>(
+      `${ATTENTION_WORK_ORDER_SQL} AND substr(w.scheduled_at, 1, 10) < ? ORDER BY w.scheduled_at ASC, w.id LIMIT 6`,
+      [localToday],
+    ),
+    safeQuery<AttentionWorkOrder>(
+      `${ATTENTION_WORK_ORDER_SQL} AND substr(w.scheduled_at, 1, 10) >= ? AND substr(w.scheduled_at, 1, 10) <= date(?, '+${DUE_SOON_DAYS} days')
+       ORDER BY w.scheduled_at ASC, w.id LIMIT 6`,
+      [localToday, localToday],
+    ),
+    safeGet<{ n: number }>(
+      `SELECT COUNT(*) as n FROM work_orders WHERE status NOT IN ('completed', 'cancelled')
+       AND substr(scheduled_at, 1, 10) >= ? AND substr(scheduled_at, 1, 10) <= date(?, '+${DUE_SOON_DAYS} days')`,
+      [localToday, localToday], { n: 0 },
+    ),
+    // Vacant now, longest-vacant first; never-leased units (no past lease) last.
+    safeQuery<{ id: number; property_id: number; unit_name: string; status: string; property_name: string | null; last_end_date: string | null }>(
+      `SELECT * FROM (
+         SELECT u.id, u.property_id, u.name as unit_name, u.status, p.name as property_name,
+           (SELECT MAX(l.end_date) FROM leases l WHERE l.unit_id = u.id AND l.status != 'cancelled' AND l.end_date < ?) as last_end_date
+         FROM units u
+         LEFT JOIN properties p ON p.id = u.property_id
+         WHERE u.status != 'unavailable' AND NOT ${occupiedToday.sql}
+       ) ORDER BY last_end_date IS NULL, last_end_date ASC, id LIMIT 6`,
+      [localToday, ...occupiedToday.params],
+    ),
+    safeGet<{ expired: number; expiring: number }>(
+      `SELECT COALESCE(SUM(end_date < ?), 0) as expired,
+         COALESCE(SUM(end_date >= ? AND end_date <= ${RENEWAL_WINDOW_END}), 0) as expiring
+       FROM leases WHERE status = 'active'`,
+      [localToday, localToday, localToday], { expired: 0, expiring: 0 },
+    ),
   ]);
 
   return c.json({
@@ -1572,7 +1686,16 @@ app.get("/api/dashboard/summary", async (c) => {
     open_work_orders: openWorkOrders.n,
     urgent_work_orders: urgentWorkOrders.n,
     overdue_work_orders: overdueWorkOrders.n,
-    recent_work_orders: recentWorkOrders,
+    overdue_charges: overdueCharges,
+    due_soon_charges: dueSoonCharges,
+    due_soon_count: dueSoonRow.n,
+    due_soon_total: dueSoonRow.total,
+    overdue_work_orders_list: overdueWorkOrdersList,
+    scheduled_work_orders: scheduledWorkOrders,
+    scheduled_count: scheduledRow.n,
+    vacant_units: vacantUnits,
+    expired_leases_count: leaseCounts.expired,
+    upcoming_expirations_count: leaseCounts.expiring,
     upcoming_expirations: upcomingExpirations,
     renewal_notice_days: parseInt(renewalSetting.value, 10) || 60,
     expired_leases: expiredLeases,
@@ -1771,11 +1894,16 @@ app.get("/api/reports/maintenance", async (c) => {
 });
 
 app.get("/api/reports/delinquency", async (c) => {
+  const propertyRaw = c.req.query("property_id");
+  const propertyId = intParam(propertyRaw);
+  if (propertyRaw !== undefined && !propertyId) return c.json({ error: "Invalid property_id" }, 400);
+  // Same overdue condition and date as the dashboard's overdue total.
+  const today = requestToday(c);
   const rows = await query(
     `SELECT
        rc.id, rc.lease_id, rc.due_date, rc.amount, rc.amount_paid,
        (rc.amount - rc.amount_paid) as balance,
-       CAST(julianday('now') - julianday(rc.due_date) AS INTEGER) as days_overdue,
+       CAST(julianday(?) - julianday(rc.due_date) AS INTEGER) as days_overdue,
        l.unit_id, u.name as unit_name, p.id as property_id, p.name as property_name,
        t.first_name as tenant_first_name, t.last_name as tenant_last_name
      FROM rent_charges rc
@@ -1783,8 +1911,9 @@ app.get("/api/reports/delinquency", async (c) => {
      LEFT JOIN units u ON u.id = l.unit_id
      LEFT JOIN properties p ON p.id = u.property_id
      LEFT JOIN tenants t ON t.id = l.primary_tenant_id
-     WHERE rc.status != 'waived' AND rc.amount_paid < rc.amount AND rc.due_date < date('now')
+     WHERE rc.status != 'waived' AND rc.amount_paid < rc.amount AND rc.due_date < ?${propertyId ? " AND u.property_id = ?" : ""}
      ORDER BY days_overdue DESC`,
+    propertyId ? [today, today, propertyId] : [today, today],
   );
   return c.json({ rows });
 });
@@ -1792,19 +1921,22 @@ app.get("/api/reports/delinquency", async (c) => {
 app.get("/api/reports/occupancy", async (c) => {
   const range = periodRange(c);
   if (!range) return c.json({ error: "from/to must be 'YYYY-MM' (1900–2999), from <= to, spanning at most 36 months" }, 400);
-  const totalRow = await get<{ n: number }>("SELECT COUNT(*) as n FROM units");
+  const propertyRaw = c.req.query("property_id");
+  const propertyId = intParam(propertyRaw);
+  if (propertyRaw !== undefined && !propertyId) return c.json({ error: "Invalid property_id" }, 400);
+  const today = requestToday(c);
+  const scope = propertyId ? " AND u.property_id = ?" : "";
+  const scopeParams = propertyId ? [propertyId] : [];
+  const totalRow = await get<{ n: number }>(`SELECT COUNT(*) as n FROM units u WHERE 1 = 1${scope}`, scopeParams);
   const totalUnits = totalRow?.n ?? 0;
   const months: { period: string; occupied_units: number; total_units: number; occupancy_rate: number }[] = [];
   let period = range.from;
   while (period <= range.to) {
+    const { from, to } = monthBounds(period);
+    const occ = unitOccupied(from, to, today);
     const row = await get<{ n: number }>(
-      `SELECT COUNT(DISTINCT u.id) as n
-       FROM units u
-       JOIN leases l ON l.unit_id = u.id
-       WHERE l.status != 'cancelled'
-         AND l.start_date <= date(? || '-01', '+1 month', '-1 day')
-         AND l.end_date >= date(? || '-01')`,
-      [period, period],
+      `SELECT COUNT(*) as n FROM units u WHERE ${occ.sql}${scope}`,
+      [...occ.params, ...scopeParams],
     );
     const occupied = row?.n ?? 0;
     months.push({
@@ -1815,7 +1947,7 @@ app.get("/api/reports/occupancy", async (c) => {
     });
     period = addMonthsSql(period, 1);
   }
-  return c.json({ from: range.from, to: range.to, months });
+  return c.json({ from: range.from, to: range.to, property_id: propertyId, months });
 });
 
 // ── Budgets ────────────────────────────────────────────────────────

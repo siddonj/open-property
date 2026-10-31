@@ -86,18 +86,18 @@ export function IncomeTab() {
               {months.map((m) => (
                 <TableRow key={m.period}>
                   <TableCell className="font-medium">{formatPeriod(m.period)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatMoney(m.charged, app.settings.currency)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-emerald-700">{formatMoney(m.collected, app.settings.currency)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-amber-700">{formatMoney(m.outstanding, app.settings.currency)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatMoney(m.charged, app.settings.currency, true)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-emerald-700">{formatMoney(m.collected, app.settings.currency, true)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-amber-700">{formatMoney(m.outstanding, app.settings.currency, true)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
           <div className="flex items-center justify-end gap-6 border-t bg-muted/40 px-3 py-3 text-sm font-semibold">
             <span>Total</span>
-            <span className="tabular-nums">{formatMoney(totals.charged, app.settings.currency)}</span>
-            <span className="tabular-nums text-emerald-700">{formatMoney(totals.collected, app.settings.currency)}</span>
-            <span className="tabular-nums text-amber-700">{formatMoney(totals.outstanding, app.settings.currency)}</span>
+            <span className="tabular-nums">{formatMoney(totals.charged, app.settings.currency, true)}</span>
+            <span className="tabular-nums text-emerald-700">{formatMoney(totals.collected, app.settings.currency, true)}</span>
+            <span className="tabular-nums text-amber-700">{formatMoney(totals.outstanding, app.settings.currency, true)}</span>
           </div>
         </>
       )}

@@ -3,6 +3,7 @@ import { useApp } from "@/context";
 import { downloadCsv, formatDate, formatMoney } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Download } from "lucide-react";
 import type { DelinquencyRow } from "@/types";
@@ -14,25 +15,31 @@ const BUCKETS = [
   { label: "90+ days", min: 91, max: Infinity },
 ];
 
+const ALL = "all";
+
 export function DelinquencyTab() {
   const app = useApp();
   const [rows, setRows] = useState<DelinquencyRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [propertyId, setPropertyId] = useState<string>(ALL);
 
   useEffect(() => {
+    // Ignore a slower response for a property that is no longer selected.
+    let cancelled = false;
     (async () => {
       try {
         setLoading(true);
-        const report = await app.getDelinquencyReport();
-        setRows(report.rows);
+        const report = await app.getDelinquencyReport({ property_id: propertyId === ALL ? undefined : Number(propertyId) });
+        if (!cancelled) setRows(report.rows);
       } catch (err) {
-        app.setError((err as Error).message);
+        if (!cancelled) app.setError((err as Error).message);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [propertyId]);
 
   const buckets = useMemo(() => {
     return BUCKETS.map((b) => ({
@@ -43,16 +50,21 @@ export function DelinquencyTab() {
 
   const total = useMemo(() => rows.reduce((s, r) => s + r.balance, 0), [rows]);
 
-  if (loading) return <div className="p-8 text-center text-sm text-muted-foreground">Loading…</div>;
-  if (rows.length === 0) return <div className="p-8 text-center text-sm text-muted-foreground">No overdue charges.</div>;
-
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Select value={propertyId} onValueChange={setPropertyId}>
+          <SelectTrigger className="w-44" aria-label="Property"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>All properties</SelectItem>
+            {app.properties.map((p) => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <Button
           variant="outline"
           size="sm"
-          onClick={() => downloadCsv("delinquency-report.csv", rows, [
+          disabled={rows.length === 0}
+          onClick={() => downloadCsv(`delinquency-report${propertyId === ALL ? "" : `-property-${propertyId}`}.csv`, rows, [
             { key: "tenant_first_name", label: "Tenant first name" },
             { key: "tenant_last_name", label: "Tenant last name" },
             { key: "property_name", label: "Property" },
@@ -65,47 +77,55 @@ export function DelinquencyTab() {
           <Download className="mr-1 h-4 w-4" /> Export CSV
         </Button>
       </div>
-      {buckets.map((b) => (
-        <Card key={b.label}>
-          <div className="flex items-center justify-between border-b p-4">
-            <h2 className="text-sm font-semibold">{b.label}</h2>
-            <span className="text-sm font-semibold tabular-nums text-rose-700">
-              {formatMoney(b.rows.reduce((s, r) => s + r.balance, 0), app.settings.currency)}
-            </span>
-          </div>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Tenant</TableHead>
-                <TableHead>Property · Unit</TableHead>
-                <TableHead>Due date</TableHead>
-                <TableHead className="text-right">Days overdue</TableHead>
-                <TableHead className="text-right">Balance</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {b.rows.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell>{[r.tenant_first_name, r.tenant_last_name].filter(Boolean).join(" ") || "—"}</TableCell>
-                  <TableCell>
-                    <span className="text-muted-foreground">{r.property_name}</span>
-                    <span className="px-1 text-muted-foreground/40">·</span>
-                    <span className="font-medium">{r.unit_name}</span>
-                  </TableCell>
-                  <TableCell>{formatDate(r.due_date)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{r.days_overdue}</TableCell>
-                  <TableCell className="text-right tabular-nums text-rose-700">{formatMoney(r.balance, app.settings.currency)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      ))}
+      {loading ? (
+        <div className="p-8 text-center text-sm text-muted-foreground">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="p-8 text-center text-sm text-muted-foreground">No overdue charges.</div>
+      ) : (
+        <>
+          {buckets.map((b) => (
+            <Card key={b.label}>
+              <div className="flex items-center justify-between border-b p-4">
+                <h2 className="text-sm font-semibold">{b.label}</h2>
+                <span className="text-sm font-semibold tabular-nums text-rose-700">
+                  {formatMoney(b.rows.reduce((s, r) => s + r.balance, 0), app.settings.currency)}
+                </span>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Tenant</TableHead>
+                    <TableHead>Property · Unit</TableHead>
+                    <TableHead>Due date</TableHead>
+                    <TableHead className="text-right">Days overdue</TableHead>
+                    <TableHead className="text-right">Balance</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {b.rows.map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell>{[r.tenant_first_name, r.tenant_last_name].filter(Boolean).join(" ") || "—"}</TableCell>
+                      <TableCell>
+                        <span className="text-muted-foreground">{r.property_name}</span>
+                        <span className="px-1 text-muted-foreground/40">·</span>
+                        <span className="font-medium">{r.unit_name}</span>
+                      </TableCell>
+                      <TableCell>{formatDate(r.due_date)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{r.days_overdue}</TableCell>
+                      <TableCell className="text-right tabular-nums text-rose-700">{formatMoney(r.balance, app.settings.currency)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Card>
+          ))}
 
-      <div className="flex items-center justify-between rounded-md border bg-muted/40 px-4 py-3">
-        <span className="text-sm font-semibold">Total overdue</span>
-        <span className="text-sm font-semibold tabular-nums text-rose-700">{formatMoney(total, app.settings.currency)}</span>
-      </div>
+          <div className="flex items-center justify-between rounded-md border bg-muted/40 px-4 py-3">
+            <span className="text-sm font-semibold">Total overdue</span>
+            <span className="text-sm font-semibold tabular-nums text-rose-700">{formatMoney(total, app.settings.currency)}</span>
+          </div>
+        </>
+      )}
     </div>
   );
 }

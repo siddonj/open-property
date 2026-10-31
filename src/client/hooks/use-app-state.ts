@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { toIsoDate } from "../lib/utils";
 import type {
   Property,
   Unit,
@@ -78,7 +79,7 @@ export function useAppState() {
 
   const refreshLookups = useCallback(async () => {
     const [props, vens, st] = await Promise.all([
-      api<{ properties: Property[] }>("GET", "/api/properties"),
+      api<{ properties: Property[] }>("GET", `/api/properties?today=${toIsoDate(new Date())}`),
       api<{ vendors: Vendor[] }>("GET", "/api/vendors").catch(() => ({ vendors: [] })),
       api<{ settings: Record<string, string> }>("GET", "/api/settings").catch(() => ({ settings: {} })),
     ]);
@@ -425,16 +426,19 @@ export function useAppState() {
     return api<MaintenanceReport>("GET", path);
   }, []);
 
-  const getDelinquencyReport = useCallback(async (): Promise<{ rows: DelinquencyRow[] }> => {
-    return api<{ rows: DelinquencyRow[] }>("GET", "/api/reports/delinquency");
+  // Both pass the local date so overdue and occupancy match the dashboard.
+  const getDelinquencyReport = useCallback(async (params?: { property_id?: number }): Promise<{ rows: DelinquencyRow[] }> => {
+    const qs = new URLSearchParams({ today: toIsoDate(new Date()) });
+    if (params?.property_id) qs.set("property_id", String(params.property_id));
+    return api<{ rows: DelinquencyRow[] }>("GET", `/api/reports/delinquency?${qs.toString()}`);
   }, []);
 
-  const getOccupancyReport = useCallback(async (params?: { from?: string; to?: string }): Promise<OccupancyReport> => {
-    const qs = new URLSearchParams();
+  const getOccupancyReport = useCallback(async (params?: { from?: string; to?: string; property_id?: number }): Promise<OccupancyReport> => {
+    const today = toIsoDate(new Date());
+    const qs = new URLSearchParams({ today, to: params?.to ?? today.slice(0, 7) });
     if (params?.from) qs.set("from", params.from);
-    if (params?.to) qs.set("to", params.to);
-    const path = qs.toString() ? `/api/reports/occupancy?${qs.toString()}` : "/api/reports/occupancy";
-    return api<OccupancyReport>("GET", path);
+    if (params?.property_id) qs.set("property_id", String(params.property_id));
+    return api<OccupancyReport>("GET", `/api/reports/occupancy?${qs.toString()}`);
   }, []);
 
   return {

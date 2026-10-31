@@ -51,6 +51,7 @@ Single Cloudflare Worker app: Hono API + static React SPA, sharing one D1 (SQLit
 
 - Phase 3 money columns (`bill_lines`, `bill_payments`, `budgets`) store **integer cents** (`*_cents` columns). Use cents for any new money column. Rent tables are still `REAL` dollars; reports convert each rent row with `CAST(ROUND(x * 100) AS INTEGER)` before summing.
 - Bills are written in steps and are only real once `complete = 1`. Every bill total, report, and payment must filter on it — reuse `billLineActuals()` for bill-line actuals rather than writing a new query.
+- Occupancy has one rule: `leaseCovers()` / `unitOccupied()` in `index.ts` (non-cancelled lease covering the period; an active lease past `end_date` runs through `today`). Use them for any occupied count instead of `units.status`. Endpoints take the operator's local date via `requestToday(c)` (`?today=`).
 - The chart of accounts (`gl_accounts`) is seeded by `migrations/0003_phase3_financial.sql`; reports group by account `type` and `is_operating`.
 
 ### Client conventions

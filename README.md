@@ -15,8 +15,9 @@ Rental property management with everything you need to run a portfolio: properti
 ### Dashboard
 - **At-a-glance KPIs** — occupancy rate, active leases, outstanding rent, open work orders
 - **This month's rent** — collected, outstanding, overdue at a glance
-- **Open work orders** (overdue first, with an overdue count) + **lease expirations** — expired-but-still-active leases and those inside the renewal window
-- **Application follow-ups due** — active applications whose follow-up date has arrived
+- **Portfolio** — units occupied this month (matches the occupancy report) and units vacant now
+- **Needs attention** — rent, maintenance, leases, applications, and vacant units, each split into overdue and upcoming (next 7 days, or the renewal window for leases) with a reason per item. Each item opens its record (`/rent?period=…&charge=…`, `/leases?id=…`, `/maintenance?id=…`, `/applications?id=…`, `/properties/…?unit=…`)
+- **Occupancy comes from leases**: a unit is occupied in a month when a lease that isn't cancelled covers any day of it; an active lease past its end date counts through today. The unit status field no longer drives occupancy figures, so they can be lower than before this change if statuses were set by hand
 
 ### Properties & units
 - Property cards with type, address, color tag, occupancy snapshot
@@ -63,7 +64,7 @@ Rental property management with everything you need to run a portfolio: properti
 - Properties and vendors with bills can't be deleted, so financial records are kept
 
 ### Reports
-- Rent roll, delinquency, occupancy, and maintenance spend
+- Rent roll, delinquency, occupancy, and maintenance spend, each filterable by property
 - **Income** — rent charged and collected by charge period, filterable by property
 - **Profit & loss** — monthly income and expenses by account, with operating, below-NOI, and capital groups and NOI. Expenses come from bill lines only (record work orders as expenses to include them)
 - **Budget** — annual amounts per property and account, edited inline, with actual, variance, and percent used
