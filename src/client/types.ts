@@ -325,6 +325,17 @@ export interface Application {
   property_name?: string | null;
 }
 
+export interface DashboardCharge {
+  id: number; period: string; due_date: string; balance: number;
+  unit_name: string | null; property_name: string | null;
+  tenant_first_name: string | null; tenant_last_name: string | null;
+}
+
+export interface DashboardWorkOrder {
+  id: number; title: string; priority: string; status: string; scheduled_at: string;
+  property_name: string | null; unit_name: string | null;
+}
+
 export interface DashboardSummary {
   period: string;
   properties: number;
@@ -341,10 +352,19 @@ export interface DashboardSummary {
   open_work_orders: number;
   urgent_work_orders: number;
   overdue_work_orders: number;
-  recent_work_orders: {
-    id: number; title: string; priority: string; status: string; scheduled_at: string | null;
-    property_name: string | null; unit_name: string | null; created_at: string;
+  overdue_charges: DashboardCharge[];
+  due_soon_charges: DashboardCharge[];
+  due_soon_count: number;
+  due_soon_total: number;
+  overdue_work_orders_list: DashboardWorkOrder[];
+  scheduled_work_orders: DashboardWorkOrder[];
+  scheduled_count: number;
+  vacant_units: {
+    id: number; property_id: number; unit_name: string; status: string;
+    property_name: string | null; last_end_date: string | null;
   }[];
+  expired_leases_count: number;
+  upcoming_expirations_count: number;
   upcoming_expirations: {
     id: number; end_date: string;
     tenant_first_name: string | null; tenant_last_name: string | null;

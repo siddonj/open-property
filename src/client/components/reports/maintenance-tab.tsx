@@ -95,7 +95,7 @@ export function MaintenanceTab() {
                 <TableRow key={m.period}>
                   <TableCell className="font-medium">{formatPeriod(m.period)}</TableCell>
                   <TableCell className="text-right tabular-nums">{m.work_order_count}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatMoney(m.total_cost, app.settings.currency)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatMoney(m.total_cost, app.settings.currency, true)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -103,7 +103,7 @@ export function MaintenanceTab() {
           <div className="flex items-center justify-end gap-6 border-t bg-muted/40 px-3 py-3 text-sm font-semibold">
             <span>Total</span>
             <span className="tabular-nums">{totals.count}</span>
-            <span className="tabular-nums">{formatMoney(totals.cost, app.settings.currency)}</span>
+            <span className="tabular-nums">{formatMoney(totals.cost, app.settings.currency, true)}</span>
           </div>
         </>
       )}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, CircleAlert, Plus, Repeat, Wrench } from "lucide-react";
 import { useApp } from "@/context";
-import { cn, daysBetween, formatDate, formatMoney, toIsoDate } from "@/lib/utils";
+import { cn, daysBetween, formatDate, formatMoney, takeIdParam, toIsoDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -52,15 +52,23 @@ export function MaintenancePage() {
       setLoading(true);
       const list = await app.listWorkOrders();
       setOrders(list);
+      return list;
     } catch (err) {
       app.setError((err as Error).message);
+      return null;
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    load();
+    // Dashboard deep link: /maintenance?id=N opens that work order whatever the filter.
+    const linked = takeIdParam("id");
+    load().then((list) => {
+      if (!linked || !list) return;
+      const found = list.find((w) => w.id === linked);
+      if (found) { setEditing(found); setDialogOpen(true); } else app.setError("That work order no longer exists.");
+    });
     app.listUnits().then(setUnits).catch((err) => app.setError((err as Error).message));
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, []);

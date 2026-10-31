@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   Building2,
-  CheckCircle2,
-  CircleAlert,
   ClipboardList,
   Home,
   Receipt,
@@ -10,10 +8,19 @@ import {
 } from "lucide-react";
 import { useApp } from "@/context";
 import { api } from "@/api";
-import { cn, daysBetween, formatDate, formatMoney, toIsoDate } from "@/lib/utils";
-import type { DashboardSummary } from "@/types";
-import { Badge } from "@/components/ui/badge";
+import { cn, daysBetween, formatDate, formatMoney, formatPeriod, toIsoDate } from "@/lib/utils";
+import type { DashboardCharge, DashboardSummary, DashboardWorkOrder } from "@/types";
 import { Card } from "@/components/ui/card";
+import { AttentionCard, type AttentionItem } from "./attention-card";
+
+// Matches the server's fixed "upcoming" window for rent and maintenance (spec D3).
+const DUE_SOON_DAYS = 7;
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const tenantName = (first: string | null, last: string | null) => [first, last].filter(Boolean).join(" ") || "—";
+const place = (property: string | null, unit: string | null, fallback = "Unassigned") =>
+  [property, unit].filter(Boolean).join(" · ") || fallback;
+const dueIn = (verb: string, days: number) => (days === 0 ? `${verb} today` : `${verb} in ${plural(days, "day")}`);
 
 export function DashboardPage({ navigate }: { navigate: (to: string) => void }) {
   const { settings, setError } = useApp();
@@ -35,6 +42,31 @@ export function DashboardPage({ navigate }: { navigate: (to: string) => void }) 
     })();
     return () => { cancelled = true; };
   }, [setError]);
+
+  const today = toIsoDate(new Date());
+  const currency = settings.currency;
+  const chargeItem = (ch: DashboardCharge, reason: string): AttentionItem => ({
+    key: ch.id,
+    title: tenantName(ch.tenant_first_name, ch.tenant_last_name),
+    detail: `${place(ch.property_name, ch.unit_name)} · ${formatPeriod(ch.period)}`,
+    reason,
+    amount: formatMoney(ch.balance, currency, true),
+    href: `/rent?period=${ch.period}&charge=${ch.id}`,
+  });
+  const workOrderItem = (w: DashboardWorkOrder, reason: string): AttentionItem => ({
+    key: w.id,
+    title: w.title,
+    detail: `${place(w.property_name, w.unit_name)}${w.priority === "urgent" ? " · Urgent" : ""}`,
+    reason,
+    href: `/maintenance?id=${w.id}`,
+  });
+  const leaseItem = (l: DashboardSummary["expired_leases"][number], reason: string): AttentionItem => ({
+    key: l.id,
+    title: tenantName(l.tenant_first_name, l.tenant_last_name),
+    detail: `${place(l.property_name, l.unit_name)} · ends ${formatDate(l.end_date)}`,
+    reason,
+    href: `/leases?id=${l.id}`,
+  });
 
   if (loading || !summary) {
     return (
@@ -99,8 +131,18 @@ export function DashboardPage({ navigate }: { navigate: (to: string) => void }) 
             <dl className="space-y-3 text-sm">
               <Row label="Properties" value={summary.properties} icon={<Building2 className="h-4 w-4" />} />
               <Row label="Total units" value={summary.units} />
-              <Row label="Occupied" value={summary.occupied} tone="positive" />
-              <Row label="Vacant" value={summary.vacant} tone={summary.vacant > 0 ? "warn" : "default"} />
+              <Row
+                label="Occupied this month"
+                value={summary.occupied}
+                tone="positive"
+                hint="Any lease day this month · matches the occupancy report"
+              />
+              <Row
+                label="Vacant now"
+                value={summary.vacant}
+                tone={summary.vacant > 0 ? "warn" : "default"}
+                hint="No lease covering today · excludes unavailable"
+              />
             </dl>
           </Card>
 
@@ -136,146 +178,94 @@ export function DashboardPage({ navigate }: { navigate: (to: string) => void }) 
           </Card>
         </section>
 
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card className="p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">
-                Open work orders
-                {summary.overdue_work_orders > 0 && (
-                  <span className="ml-2 text-xs font-medium text-rose-600">{summary.overdue_work_orders} overdue</span>
-                )}
-              </h2>
-              <button
-                type="button"
-                onClick={() => navigate("/maintenance")}
-                className="text-xs font-medium text-primary hover:underline"
-              >
-                View all
-              </button>
-            </div>
-            {summary.recent_work_orders.length === 0 ? (
-              <Empty icon={<CheckCircle2 className="h-5 w-5" />} title="All caught up" message="No open work orders right now." />
-            ) : (
-              <ul className="divide-y">
-                {summary.recent_work_orders.map((w) => (
-                  <li key={w.id} className="flex items-center justify-between gap-4 py-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{w.title}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {[w.property_name, w.unit_name].filter(Boolean).join(" · ") || "Unassigned"}
-                        {w.scheduled_at && w.scheduled_at.slice(0, 10) < toIsoDate(new Date()) && (
-                          <span className="ml-1 font-medium text-rose-600">· Overdue since {formatDate(w.scheduled_at)}</span>
-                        )}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <PriorityBadge priority={w.priority} />
-                      <StatusBadge status={w.status} />
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-
-          <Card className="p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Lease expirations</h2>
-              <button
-                type="button"
-                onClick={() => navigate("/leases")}
-                className="text-xs font-medium text-primary hover:underline"
-              >
-                View all
-              </button>
-            </div>
-            {summary.upcoming_expirations.length === 0 && summary.expired_leases.length === 0 ? (
-              <Empty
-                icon={<CheckCircle2 className="h-5 w-5" />}
-                title={`Nothing in the next ${summary.renewal_notice_days} days`}
-                message="No lease expirations coming up."
-              />
-            ) : (
-              <ul className="divide-y">
-                {[...summary.expired_leases, ...summary.upcoming_expirations].map((l) => {
-                  const days = daysBetween(toIsoDate(new Date()), l.end_date);
-                  return (
-                    <li key={l.id}>
-                      <button
-                        type="button"
-                        onClick={() => navigate("/leases")}
-                        className="flex w-full items-center justify-between gap-4 py-3 text-left hover:bg-muted/40"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">
-                            {l.tenant_first_name || "—"} {l.tenant_last_name || ""}
-                          </p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {[l.property_name, l.unit_name].filter(Boolean).join(" · ")}
-                          </p>
-                        </div>
-                        <div className="text-right text-xs">
-                          <div className="font-medium text-foreground">{formatDate(l.end_date)}</div>
-                          <div className={cn(
-                            "text-muted-foreground",
-                            days <= 14 && "text-rose-600 font-medium",
-                          )}>
-                            {days < 0 ? "Expired · still active" : days === 0 ? "Ends today" : `Expiring in ${days} day${days === 1 ? "" : "s"}`}
-                          </div>
-                        </div>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Card>
-
-          <Card className="p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">
-                Application follow-ups due
-                {summary.followups_due_count > 0 && (
-                  <span className="ml-2 text-xs font-normal text-muted-foreground">{summary.followups_due_count}</span>
-                )}
-              </h2>
-              <button
-                type="button"
-                onClick={() => navigate("/applications")}
-                className="text-xs font-medium text-primary hover:underline"
-              >
-                View all
-              </button>
-            </div>
-            {summary.followups_due.length === 0 ? (
-              <Empty icon={<CheckCircle2 className="h-5 w-5" />} title="No follow-ups due" message="Active applications are on schedule." />
-            ) : (
-              <ul className="divide-y">
-                {summary.followups_due.map((a) => {
-                  const overdue = a.follow_up_date < toIsoDate(new Date());
-                  return (
-                    <li key={a.id}>
-                      <button
-                        type="button"
-                        onClick={() => navigate("/applications")}
-                        className="flex w-full items-center justify-between gap-4 py-3 text-left hover:bg-muted/40"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">{a.first_name} {a.last_name}</p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {[a.property_name, a.unit_name].filter(Boolean).join(" · ") || "No unit"} · <span className="capitalize">{a.status}</span>
-                          </p>
-                        </div>
-                        <div className={cn("text-right text-xs", overdue ? "font-medium text-rose-600" : "text-amber-700")}>
-                          {overdue ? `Overdue · ${formatDate(a.follow_up_date)}` : "Due today"}
-                        </div>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Card>
+        <section className="space-y-3" aria-labelledby="attention-heading">
+          <h2 id="attention-heading" className="text-sm font-semibold">Needs attention</h2>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <AttentionCard
+              title="Rent"
+              viewAll="/rent"
+              emptyMessage={`Nothing overdue or due in the next ${DUE_SOON_DAYS} days.`}
+              navigate={navigate}
+              groups={[
+                {
+                  label: "Overdue", tone: "overdue", count: summary.overdue_count,
+                  items: summary.overdue_charges.map((ch) => chargeItem(ch, `${plural(daysBetween(ch.due_date, today), "day")} overdue`)),
+                },
+                {
+                  label: `Due in ${DUE_SOON_DAYS} days`, tone: "upcoming", count: summary.due_soon_count,
+                  items: summary.due_soon_charges.map((ch) => chargeItem(ch, dueIn("Due", daysBetween(today, ch.due_date)))),
+                },
+              ]}
+            />
+            <AttentionCard
+              title="Maintenance"
+              viewAll="/maintenance"
+              emptyMessage={`No work orders overdue or scheduled in the next ${DUE_SOON_DAYS} days.`}
+              navigate={navigate}
+              groups={[
+                {
+                  label: "Overdue", tone: "overdue", count: summary.overdue_work_orders,
+                  items: summary.overdue_work_orders_list.map((w) => workOrderItem(w, `${plural(daysBetween(w.scheduled_at.slice(0, 10), today), "day")} overdue`)),
+                },
+                {
+                  label: `Scheduled in ${DUE_SOON_DAYS} days`, tone: "upcoming", count: summary.scheduled_count,
+                  items: summary.scheduled_work_orders.map((w) => workOrderItem(w, dueIn("Scheduled", daysBetween(today, w.scheduled_at.slice(0, 10))))),
+                },
+              ]}
+            />
+            <AttentionCard
+              title="Leases"
+              viewAll="/leases"
+              emptyMessage={`No lease expirations in the next ${summary.renewal_notice_days} days.`}
+              navigate={navigate}
+              groups={[
+                {
+                  label: "Expired, still active", tone: "overdue", count: summary.expired_leases_count,
+                  items: summary.expired_leases.map((l) => leaseItem(l, `Ended ${plural(daysBetween(l.end_date, today), "day")} ago`)),
+                },
+                {
+                  label: `Ending in ${summary.renewal_notice_days} days`, tone: "upcoming", count: summary.upcoming_expirations_count,
+                  items: summary.upcoming_expirations.map((l) => leaseItem(l, dueIn("Ends", daysBetween(today, l.end_date)))),
+                },
+              ]}
+            />
+            <AttentionCard
+              title="Applications"
+              viewAll="/applications"
+              emptyMessage="Active applications are on schedule."
+              navigate={navigate}
+              groups={[
+                {
+                  label: "Follow-up due", tone: "overdue", count: summary.followups_due_count,
+                  items: summary.followups_due.map((a) => ({
+                    key: a.id,
+                    title: `${a.first_name} ${a.last_name}`,
+                    detail: `${place(a.property_name, a.unit_name, "No unit")} · ${a.status}`,
+                    reason: a.follow_up_date < today ? `${plural(daysBetween(a.follow_up_date, today), "day")} overdue` : "Due today",
+                    href: `/applications?id=${a.id}`,
+                  })),
+                },
+              ]}
+            />
+            <AttentionCard
+              title="Vacant units"
+              viewAll="/properties"
+              emptyMessage="Every rentable unit has a lease covering today."
+              navigate={navigate}
+              groups={[
+                {
+                  label: "Vacant now", tone: "overdue", count: summary.vacant,
+                  items: summary.vacant_units.map((u) => ({
+                    key: u.id,
+                    title: u.unit_name,
+                    detail: [u.property_name, u.status === "turnover" ? "Turnover" : null].filter(Boolean).join(" · "),
+                    reason: u.last_end_date ? `Vacant ${plural(daysBetween(u.last_end_date, today), "day")}` : "Never leased",
+                    href: `/properties/${u.property_id}?unit=${u.id}`,
+                  })),
+                },
+              ]}
+            />
+          </div>
         </section>
       </div>
     </div>
@@ -309,18 +299,22 @@ function KpiCard({
 }
 
 function Row({
-  label, value, icon, tone = "default",
+  label, value, icon, tone = "default", hint,
 }: {
   label: string;
   value: string | number;
   icon?: React.ReactNode;
   tone?: "default" | "positive" | "warn" | "danger";
+  hint?: string;
 }) {
   return (
     <div className="flex items-center justify-between">
-      <dt className="flex items-center gap-2 text-muted-foreground">
-        {icon}
-        {label}
+      <dt className="text-muted-foreground">
+        <span className="flex items-center gap-2">
+          {icon}
+          {label}
+        </span>
+        {hint && <span className="block text-xs text-muted-foreground/80">{hint}</span>}
       </dt>
       <dd className={cn(
         "font-medium tabular-nums",
@@ -358,47 +352,3 @@ function Stat({
   );
 }
 
-function Empty({
-  icon, title, message,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  message: string;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-1 py-8 text-center">
-      <span className="text-muted-foreground">{icon}</span>
-      <p className="text-sm font-medium">{title}</p>
-      <p className="text-xs text-muted-foreground">{message}</p>
-    </div>
-  );
-}
-
-function PriorityBadge({ priority }: { priority: string }) {
-  const map: Record<string, string> = {
-    urgent: "bg-rose-100 text-rose-800 border-rose-200",
-    high: "bg-amber-100 text-amber-800 border-amber-200",
-    normal: "bg-sky-100 text-sky-800 border-sky-200",
-    low: "bg-slate-100 text-slate-700 border-slate-200",
-  };
-  return (
-    <span className={cn(
-      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-      map[priority] ?? map.normal,
-    )}>
-      {priority === "urgent" && <CircleAlert className="h-3 w-3" />}
-      {priority}
-    </span>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    open: "secondary",
-    assigned: "default",
-    in_progress: "default",
-    completed: "outline",
-    cancelled: "outline",
-  };
-  return <Badge variant={(map[status] ?? "secondary") as never} className="capitalize">{status.replace("_", " ")}</Badge>;
-}
