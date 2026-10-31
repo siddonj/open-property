@@ -55,7 +55,7 @@ function buildUpdate(fields: Record<string, unknown>): { sets: string[]; params:
 // Falls back to the UTC date when absent or malformed.
 function requestToday(c: Context): string {
   const q = c.req.query("today");
-  return q && DATE_RE.test(q) ? q : new Date().toISOString().slice(0, 10);
+  return q && isCalendarDate(q) ? q : new Date().toISOString().slice(0, 10);
 }
 
 function monthBounds(period: string): { from: string; to: string } {
@@ -652,6 +652,7 @@ app.post("/api/rent-charges/generate", async (c) => {
   const body = await c.req.json().catch(() => ({})) as { period?: string };
   const period = body.period;
   if (!period || !/^\d{4}-\d{2}$/.test(period)) return c.json({ error: "period (YYYY-MM) required" }, 400);
+  const today = requestToday(c);
   const leases = await query<{ id: number; monthly_rent: number; rent_due_day: number; start_date: string; end_date: string }>(
     "SELECT id, monthly_rent, rent_due_day, start_date, end_date FROM leases WHERE status = 'active'",
   );
@@ -671,7 +672,8 @@ app.post("/api/rent-charges/generate", async (c) => {
   // Re-mark anything past due as 'overdue'.
   await run(
     `UPDATE rent_charges SET status = 'overdue'
-     WHERE status IN ('open', 'partial') AND amount_paid < amount AND due_date < date('now')`,
+     WHERE status IN ('open', 'partial') AND amount_paid < amount AND due_date < ?`,
+    [today],
   );
   return c.json({ created, period });
 });
@@ -715,18 +717,18 @@ const PaymentInput = z.object({
 
 // Recompute a charge's amount_paid and status from its payments. An unpaid balance past
 // its due date stays 'overdue', matching how /api/rent-charges/generate marks charges.
-async function recomputeCharge(chargeId: number) {
+async function recomputeCharge(chargeId: number, today: string) {
   const paid = "(SELECT COALESCE(SUM(amount), 0) FROM payments WHERE charge_id = rent_charges.id)";
   await run(
     `UPDATE rent_charges SET
        amount_paid = ${paid},
        status = CASE
          WHEN ${paid} >= amount THEN 'paid'
-         WHEN due_date < date('now') THEN 'overdue'
+         WHEN due_date < ? THEN 'overdue'
          WHEN ${paid} > 0 THEN 'partial'
          ELSE 'open' END
      WHERE id = ?`,
-    [chargeId],
+    [today, chargeId],
   );
 }
 
@@ -748,7 +750,7 @@ app.post("/api/payments", async (c) => {
      VALUES (?, COALESCE(?, datetime('now')), ?, ?, ?, ?)`,
     [d.charge_id, d.paid_at ?? null, d.amount, d.method ?? "cash", d.reference ?? null, d.notes ?? null],
   );
-  await recomputeCharge(d.charge_id);
+  await recomputeCharge(d.charge_id, requestToday(c));
   const updated = await get(`${CHARGE_SELECT} WHERE c.id = ?`, [d.charge_id]);
   return c.json({ charge: updated }, 201);
 });
@@ -759,7 +761,7 @@ app.delete("/api/payments/:id", async (c) => {
   const row = await get<{ charge_id: number }>("SELECT charge_id FROM payments WHERE id = ?", [id]);
   if (!row) return c.json({ error: "Not found" }, 404);
   await run("DELETE FROM payments WHERE id = ?", [id]);
-  await recomputeCharge(row.charge_id);
+  await recomputeCharge(row.charge_id, requestToday(c));
   return c.json({ ok: true });
 });
 
@@ -974,8 +976,12 @@ app.post("/api/work-orders/:id/approval", async (c) => {
 const GENERATE_HORIZON_DAYS = 14;
 // Safety bound on occurrence stepping per template; stepping starts near the anchor date.
 const MAX_OCCURRENCE_STEPS = 5_000;
-// Calendar date with a real month/day range (DATE_RE only checks the shape).
+// Calendar date with a real month/day range (isCalendarDate also rejects e.g. Feb 31).
 const STRICT_DATE_RE = /^2\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+// Date.UTC rolls 2026-02-31 over to March, so a round trip catches days the month doesn't have.
+function isCalendarDate(s: string): boolean {
+  return STRICT_DATE_RE.test(s) && new Date(`${s}T00:00:00Z`).toISOString().startsWith(s);
+}
 // The client sends its local date; allow the timezone gap, reject a skewed clock.
 const MAX_CLIENT_DAY_SKEW = 1;
 
@@ -1480,8 +1486,6 @@ app.delete("/api/applications/:id", async (c) => {
 const RENEWAL_WINDOW_END =
   "date(?, '+' || COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'renewal_notice_days'), 60) || ' days')";
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
 // Fixed "upcoming" window for rent and maintenance alerts (spec D3).
 const DUE_SOON_DAYS = 7;
 
@@ -1560,8 +1564,8 @@ app.get("/api/dashboard/summary", async (c) => {
     ),
     safeGet<{ n: number }>("SELECT COUNT(*) as n FROM leases WHERE status = 'active'", [], { n: 0 }),
     safeGet<{ n: number }>(
-      "SELECT COUNT(*) as n FROM leases WHERE status = 'active' AND end_date <= date(?, '+30 days')",
-      [localToday], { n: 0 },
+      "SELECT COUNT(*) as n FROM leases WHERE status = 'active' AND end_date >= ? AND end_date <= date(?, '+30 days')",
+      [localToday, localToday], { n: 0 },
     ),
     safeGet<{ total: number }>(
       "SELECT COALESCE(SUM(amount - amount_paid), 0) as total FROM rent_charges WHERE period = ? AND status != 'waived'",
