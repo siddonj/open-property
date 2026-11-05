@@ -133,13 +133,15 @@ wrangler r2 bucket create open-property-docs
 
 Access must cover the whole hostname. The app only checks the token Access adds; a request that skips Access has no token and gets 401.
 
-**3. Set the Worker's variables** (dashboard → the Worker → Settings → Variables, or `[vars]` in a private copy of `wrangler.toml`):
+**3. Set the Worker's settings** as secrets (each command prompts for the value):
 
-| Variable | Value |
-|---|---|
-| `ACCESS_TEAM_DOMAIN` | `https://<team>.cloudflareaccess.com` |
-| `ACCESS_AUD` | the Application Audience tag |
-| `ADMIN_EMAIL` | the first admin's email (they add everyone else in Settings → Users) |
+```bash
+wrangler secret put ACCESS_TEAM_DOMAIN   # https://<team>.cloudflareaccess.com
+wrangler secret put ACCESS_AUD           # the Application Audience tag
+wrangler secret put ADMIN_EMAIL          # the first admin's email (they add everyone else in Settings → Users)
+```
+
+Use secrets, not plain variables set in the dashboard: `wrangler deploy` replaces dashboard variables with the `[vars]` in `wrangler.toml` (none here), so they'd be wiped on every deploy. Secrets are kept. If the Worker doesn't exist yet, Wrangler offers to create it.
 
 Never set `AUTH_DEV_USER` on a deployed Worker. It's ignored off `localhost` and whenever Access is configured, but it doesn't belong there.
 
