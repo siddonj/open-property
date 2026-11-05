@@ -11,6 +11,10 @@
 // 'demo_seed' settings key, so applying the file twice fails instead of duplicating data.
 // Rows are written directly, not through the API, so no activity history is recorded.
 // New ids start at 101+ so they don't collide with the three baseline sample properties.
+// Needs migration 0005 (full applications). A database seeded before it gets the application
+// details with --update-applications and the --today it was seeded with (its 'demo_seed' value):
+//
+//   node scripts/seed-demo.mjs --update-applications --today 2026-11-05 > /tmp/seed-apps.sql
 
 import assert from "node:assert/strict";
 
@@ -381,19 +385,112 @@ for (const prop of properties) {
 // ── Applications for units that are empty now ─────────────────────
 const vacantNow = units.filter((u) => !u.leases.some((l) => l.start <= TODAY && l.end >= TODAY));
 const APP_STATUSES = ["new", "new", "new", "screening", "screening", "approved", "approved", "declined", "withdrawn"];
+const apps = [];
 for (let i = 0; i < Math.max(8, vacantNow.length * 2); i++) {
   const unit = vacantNow.length ? pick(vacantNow) : pick(units);
   const status = pick(APP_STATUSES);
   const created = addDays(TODAY, -int(1, 40));
   const first = pick(FIRST_NAMES);
   const last = pick(LAST_NAMES);
-  row("applications", {
+  const app = {
     id: nextId("applications", 101), unit_id: unit.id, first_name: first, last_name: last,
     email: `${first}.${last}.app${i}@example.com`.toLowerCase(), phone: `512-555-${pad(int(0, 9999), 4)}`,
     monthly_income: Math.round((unit.rent * (2.2 + rand() * 1.8)) / 50) * 50, employer: pick(EMPLOYERS),
     desired_move_in: addDays(TODAY, int(7, 45)), status,
     follow_up_date: status === "new" || status === "screening" ? addDays(TODAY, int(-3, 7)) : null,
     created_at: `${created} 11:00:00`, updated_at: `${addDays(created, int(0, daysBetween(created, TODAY)))} 11:00:00`,
+  };
+  row("applications", app);
+  apps.push({ app, unit, created });
+}
+
+// ── Full application details (migration 0005) ─────────────────────
+// Drawn after every other random value, so every row above matches a database seeded before
+// these fields existed; --update-applications fills them in on such a database.
+const ADMIN = { sql: "(SELECT id FROM users WHERE role = 'admin' AND active = 1 ORDER BY id LIMIT 1)" };
+const STREETS = ["Burnet Rd", "S Lamar Blvd", "Manor Rd", "E Riverside Dr", "Airport Blvd", "W Slaughter Ln", "N Lamar Blvd", "E Oltorf St"];
+const POSITIONS = ["Nurse", "Teacher", "Software engineer", "Store manager", "Technician", "Analyst", "Driver", "Account manager"];
+const CARS = [["Toyota", "Camry"], ["Honda", "Civic"], ["Ford", "F-150"], ["Tesla", "Model 3"], ["Chevrolet", "Equinox"], ["Hyundai", "Elantra"]];
+const MOVE_REASONS = ["Lease ending", "Need more space", "Closer to work", "Rent increase"];
+const phone = () => `512-555-${pad(int(0, 9999), 4)}`;
+const person = (last = pick(LAST_NAMES)) => `${pick(FIRST_NAMES)} ${last}`;
+const address = () => `${int(100, 9999)} ${pick(STREETS)}, Austin, TX`;
+const monthStart = (date, back) => `${addPeriods(date.slice(0, 7), -back)}-01`;
+const between = (from, to) => addDays(from, int(0, Math.max(0, daysBetween(from, to))));
+const json = (v) => (v && (!Array.isArray(v) || v.length) ? JSON.stringify(v) : null);
+const flag = (p) => (chance(p) ? 1 : 0);
+const car = () => { const [make, model] = pick(CARS); return { year: String(int(2012, 2025)), make, model, plate: `${pick(["LKX", "PNR", "DWT", "HFM"])}${int(1000, 9999)}`, state: "TX" }; };
+function job(earner, employer, created, monthly) {
+  const own = employer === "Self-employed";
+  return {
+    earner, type: own ? "self_employment" : "employment", employer, position: own ? "Owner" : pick(POSITIONS),
+    start: monthStart(created, int(8, 72)), monthly_cents: cents(monthly),
+    supervisor: own ? null : person(), supervisor_phone: own ? null : phone(),
+  };
+}
+
+for (const { app, unit, created } of apps) {
+  const { status: s, last_name: last } = app;
+  const rentCents = cents(unit.rent);
+  const coName = chance(0.4) ? person() : null;
+  const incomes = [job(`${app.first_name} ${last}`, app.employer, created, app.monthly_income)];
+  if (coName && chance(0.8)) incomes.push(job(coName, pick(EMPLOYERS), created, money(1800, 4500, 50)));
+  const income = incomes.reduce((t, i) => t + i.monthly_cents, 0);
+  const meets = income >= 3 * rentCents;
+  const incomplete = s === "new" && chance(0.4);
+  const completed = incomplete ? null : between(created, minDate(addDays(created, 3), TODAY));
+  const decided = s === "approved" || s === "declined" ? between(completed, TODAY) : null;
+  const declineReason = s === "declined" ? (meets ? pick(["rental_history", "credit", "other"]) : "income") : null;
+  const guarantor = s === "approved" && !meets ? { name: person(), phone: phone(), email: null, monthly_cents: cents(money(6000, 12000, 100)) } : null;
+  const deposit = chance(0.6) ? 25000 : null;
+  const outcome = !deposit ? null
+    : s === "approved" ? "applied" : s === "new" || s === "screening" ? "held"
+    : pick(s === "declined" ? ["refunded", "held"] : ["refunded", "forfeited"]);
+  const verification = s === "withdrawn" ? pick(["not_started", "requested"])
+    : { new: "not_started", screening: "requested", approved: "verified", declined: "verified" }[s];
+  const verified = verification === "verified";
+  const noticeGiven = !(s === "declined" && chance(0.5));
+  const movedIn = monthStart(created, int(12, 36));
+  const residences = [
+    { address: address(), from: movedIn, to: null, rent_cents: cents(money(950, 2100)), landlord_name: `${pick(["Oak", "Cedar", "Pecan"])} Property Management`, landlord_phone: phone(), reason: pick(MOVE_REASONS) },
+    { address: address(), from: monthStart(movedIn, int(12, 30)), to: addDays(movedIn, -1), rent_cents: cents(money(850, 1800)), landlord_name: person(), landlord_phone: phone(), reason: pick(MOVE_REASONS) },
+  ];
+  const dog = pick([["Labrador mix", 50, 75], ["Beagle", 18, 30], ["Goldendoodle", 35, 60], ["Dachshund", 10, 25]]);
+  const pets = !chance(0.35) ? [] : chance(0.6)
+    ? [{ type: "Dog", breed: dog[0], weight_lbs: int(dog[1], dog[2]), age: `${int(1, 10)} years`, neutered: true, vaccinated: true }]
+    : [{ type: "Cat", breed: "Domestic shorthair", weight_lbs: int(7, 14), age: `${int(1, 12)} years`, neutered: true, vaccinated: chance(0.9) }];
+  const disclosures = Object.fromEntries(["evicted", "asked_to_move", "broke_lease", "bankruptcy", "convicted", "sex_offender", "pending_charges"].map((k) => [k, { answer: false, explanation: null }]));
+  if (declineReason === "rental_history") disclosures.broke_lease = { answer: true, explanation: "Moved for a job and broke the lease four months early." };
+
+  Object.assign(app, {
+    monthly_income: income / 100,
+    former_names: chance(0.1) ? `${app.first_name} ${pick(LAST_NAMES)}` : null,
+    lease_term_months: pick([12, 12, 12, 6, 18]), quoted_rent_cents: rentCents, quoted_deposit_cents: rentCents,
+    referral_source: pick(["Zillow", "Apartments.com", "Yard sign", "Resident referral", "Facebook Marketplace", "Our website"]),
+    active_military: flag(0.05), smoker: flag(0.1),
+    co_applicants: json(coName ? [{ name: coName, email: `${coName.replace(" ", ".")}.co${app.id}@example.com`.toLowerCase(), phone: phone() }] : []),
+    occupants: json(chance(0.3) ? [{ name: person(last), minor: true }] : []),
+    emergency_contact: json({ name: person(last), phone: phone(), relationship: pick(["Parent", "Sibling", "Friend"]) }),
+    residences: json(residences), incomes: json(incomes), pets: json(pets),
+    vehicles: json(coName ? [car(), car()] : [car()]),
+    personal_references: json([1, 2].map(() => ({ name: person(), phone: phone(), relationship: pick(["Coworker", "Former landlord", "Friend"]) }))),
+    disclosures: json(disclosures), guarantor: json(guarantor),
+    fee_cents: 5000, fee_paid_on: created,
+    deposit_cents: deposit, deposit_paid_on: deposit && created, deposit_outcome: outcome,
+    deposit_refunded_on: outcome === "refunded" ? between(decided ?? created, TODAY) : null,
+    refund_address: deposit && residences[0].address,
+    criteria_notice_on: noticeGiven ? created : null, criteria_ack_on: noticeGiven ? created : null,
+    authorized_on: incomplete ? null : created, certified_on: incomplete ? null : created, completed_on: completed,
+    decided_at: decided && `${decided} 15:00:00`, decided_by: decided ? ADMIN : null,
+    conditions: guarantor ? "Guarantor required (income below 3× rent)" : s === "approved" && chance(0.3) ? "Additional deposit of half a month's rent" : null,
+    decline_reason: declineReason,
+    decline_notes: declineReason === "income" ? `Household income ${(income / rentCents).toFixed(1)}× rent; criteria require 3×.`
+      : declineReason === "other" ? "Needs to move in before the unit is ready." : null,
+    notified_at: decided, notified_method: decided ? pick(["email", "phone", "mail"]) : null,
+    income_verification_status: verification,
+    verified_income_cents: verified ? Math.round(income * (0.9 + rand() * 0.1)) : null,
+    verified_on: verified ? between(completed, decided) : null, verified_by: verified ? ADMIN : null,
+    updated_at: decided ? `${decided} 15:00:00` : app.updated_at,
   });
 }
 
@@ -420,26 +517,41 @@ for (const p of rowsOf("bill_payments")) assert.equal(p.amount_cents, billTotals
 for (const [t, col] of [["payments", "paid_at"], ["bills", "bill_date"], ["bill_payments", "paid_on"], ["work_orders", "completed_at"]]) {
   for (const r of rowsOf(t)) assert.ok(!r[col] || r[col] <= TODAY, `${t} ${r.id}: ${col} ${r[col]} is after ${TODAY}`);
 }
+for (const a of rowsOf("applications")) {
+  const incomeCents = JSON.parse(a.incomes).reduce((t, i) => t + i.monthly_cents, 0);
+  assert.equal(cents(a.monthly_income), incomeCents, `application ${a.id}: monthly_income != incomes`);
+  assert.equal(!!a.decided_at, a.status === "approved" || a.status === "declined", `application ${a.id}: decision vs status`);
+  for (const col of ["fee_paid_on", "completed_on", "verified_on", "notified_at", "deposit_refunded_on", "decided_at"]) {
+    const d = a[col]?.slice(0, 10);
+    assert.ok(!d || (d >= a.created_at.slice(0, 10) && d <= TODAY), `application ${a.id}: ${col} ${d} outside created..today`);
+  }
+}
 
 // ── Emit ──────────────────────────────────────────────────────────
 const ORDER = ["vendors", "properties", "units", "tenants", "leases", "rent_charges", "payments", "recurring_tasks", "work_orders", "bills", "bill_lines", "bill_payments", "budgets", "applications"];
-const out = [
-  `-- Open Property demo data: ${MONTHS} months ending ${TODAY}. Generated by scripts/seed-demo.mjs.`,
-  `INSERT INTO settings (key, value) VALUES ('demo_seed', ${lit(TODAY)});`,
-];
-const BATCH = 100;
-for (const table of ORDER) {
-  const rows = tables.get(table) ?? [];
-  // Columns are the union across rows so optional fields line up.
-  const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const values = rows.slice(i, i + BATCH).map((r) => `(${cols.map((c) => lit(r[c])).join(", ")})`);
-    out.push(`INSERT INTO ${table} (${cols.join(", ")}) VALUES\n${values.join(",\n")};`);
+const out = [`-- Open Property demo data: ${MONTHS} months ending ${TODAY}. Generated by scripts/seed-demo.mjs.`];
+if (args.includes("--update-applications")) {
+  // Rewrites the seeded applications in place. Matching on email too means a --today that differs
+  // from the database's demo_seed value updates nothing instead of the wrong rows.
+  for (const { id, created_at, ...set } of rowsOf("applications")) {
+    out.push(`UPDATE applications SET ${Object.entries(set).map(([c, v]) => `${c} = ${lit(v)}`).join(", ")} WHERE id = ${id} AND email = ${lit(set.email)};`);
   }
-}
-for (const status of ["occupied", "turnover"]) {
-  const list = units.filter((u) => unitStatus(u) === status).map((u) => u.id);
-  if (list.length) out.push(`UPDATE units SET status = '${status}' WHERE id IN (${list.join(", ")});`);
+} else {
+  out.push(`INSERT INTO settings (key, value) VALUES ('demo_seed', ${lit(TODAY)});`);
+  const BATCH = 100;
+  for (const table of ORDER) {
+    const rows = tables.get(table) ?? [];
+    // Columns are the union across rows so optional fields line up.
+    const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const values = rows.slice(i, i + BATCH).map((r) => `(${cols.map((c) => lit(r[c])).join(", ")})`);
+      out.push(`INSERT INTO ${table} (${cols.join(", ")}) VALUES\n${values.join(",\n")};`);
+    }
+  }
+  for (const status of ["occupied", "turnover"]) {
+    const list = units.filter((u) => unitStatus(u) === status).map((u) => u.id);
+    if (list.length) out.push(`UPDATE units SET status = '${status}' WHERE id IN (${list.join(", ")});`);
+  }
 }
 process.stdout.write(out.join("\n") + "\n");
 
