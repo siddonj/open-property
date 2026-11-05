@@ -1640,6 +1640,38 @@ app.post("/api/bill-payments/:id/void", async (c) => {
 
 // ── Applications ───────────────────────────────────────────────────
 
+// Field set and Texas rules: docs/sdlc/changes/rental-application/spec.md. No SSN, DOB, ID numbers or
+// protected-class fields by design.
+const aText = z.string().max(500).optional().nullable();
+const aDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable();
+const aCents = z.number().int().min(0).optional().nullable();
+const aList = <T extends z.ZodTypeAny>(item: T) => z.array(item).max(20).optional().nullable();
+const DISCLOSURE_KEYS = ["evicted", "asked_to_move", "broke_lease", "bankruptcy", "convicted", "sex_offender", "pending_charges"] as const;
+const Disclosure = z.object({ answer: z.boolean().nullable(), explanation: aText });
+
+// JSON-text columns, one per section so activity history shows which section changed.
+const APPLICATION_JSON = {
+  co_applicants: aList(z.object({ name: z.string().max(200), email: aText, phone: aText })),
+  occupants: aList(z.object({ name: z.string().max(200), minor: z.boolean() })),
+  emergency_contact: z.object({ name: aText, phone: aText, relationship: aText }).optional().nullable(),
+  residences: aList(z.object({
+    address: aText, from: aDay, to: aDay, rent_cents: aCents, landlord_name: aText, landlord_phone: aText, reason: aText,
+  })),
+  incomes: aList(z.object({
+    earner: aText, type: z.enum(["employment", "self_employment", "benefits", "child_support", "other"]),
+    employer: aText, position: aText, start: aDay, monthly_cents: aCents, supervisor: aText, supervisor_phone: aText,
+  })),
+  pets: aList(z.object({
+    type: aText, breed: aText, weight_lbs: z.number().min(0).optional().nullable(), age: aText,
+    neutered: z.boolean().optional().nullable(), vaccinated: z.boolean().optional().nullable(),
+  })),
+  vehicles: aList(z.object({ year: aText, make: aText, model: aText, plate: aText, state: aText })),
+  personal_references: aList(z.object({ name: aText, phone: aText, relationship: aText })),
+  disclosures: z.object(Object.fromEntries(DISCLOSURE_KEYS.map((k) => [k, Disclosure.optional()]))).optional().nullable(),
+  guarantor: z.object({ name: aText, phone: aText, email: aText, monthly_cents: aCents }).optional().nullable(),
+};
+const JSON_COLUMNS = Object.keys(APPLICATION_JSON);
+
 const ApplicationInput = z.object({
   unit_id: z.number().int().nullable().optional(),
   first_name: z.string().min(1),
@@ -1652,7 +1684,75 @@ const ApplicationInput = z.object({
   follow_up_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
   status: z.enum(["new", "screening", "approved", "declined", "withdrawn"]).optional(),
   notes: z.string().optional().nullable(),
+  former_names: aText,
+  lease_term_months: z.number().int().min(1).max(60).optional().nullable(),
+  quoted_rent_cents: aCents,
+  quoted_deposit_cents: aCents,
+  referral_source: aText,
+  active_military: z.boolean().optional().nullable(),
+  smoker: z.boolean().optional().nullable(),
+  ...APPLICATION_JSON,
+  fee_cents: aCents,
+  fee_paid_on: aDay,
+  deposit_cents: aCents,
+  deposit_paid_on: aDay,
+  deposit_outcome: z.enum(["held", "applied", "refunded", "forfeited"]).optional().nullable(),
+  deposit_refunded_on: aDay,
+  refund_address: aText,
+  criteria_notice_on: aDay,
+  criteria_ack_on: aDay,
+  authorized_on: aDay,
+  certified_on: aDay,
+  completed_on: aDay,
+  conditions: aText,
+  decline_reason: z.enum(["income", "rental_history", "credit", "criminal_history", "incomplete", "false_information", "unit_unavailable", "other"]).optional().nullable(),
+  decline_notes: aText,
+  notified_at: aDay,
+  notified_method: z.enum(["phone", "mail", "email", "in_person"]).optional().nullable(),
+  income_verification_status: z.enum(["not_started", "requested", "verified", "unable_to_verify", "waived"]).optional(),
+  verified_income_cents: aCents,
+  verified_on: aDay,
 });
+type ApplicationData = Partial<z.infer<typeof ApplicationInput>>;
+
+const APPLICATION_SELECT = `
+  SELECT a.*, u.name as unit_name, u.property_id as property_id, u.market_rent as unit_market_rent, p.name as property_name,
+    COALESCE(NULLIF(du.name, ''), du.email) as decided_by_name, COALESCE(NULLIF(vu.name, ''), vu.email) as verified_by_name
+  FROM applications a
+  LEFT JOIN units u ON u.id = a.unit_id
+  LEFT JOIN properties p ON p.id = u.property_id
+  LEFT JOIN users du ON du.id = a.decided_by
+  LEFT JOIN users vu ON vu.id = a.verified_by`;
+
+// Lists go to the database as JSON text and come back as values.
+function applicationColumns(d: ApplicationData): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...d };
+  for (const k of JSON_COLUMNS) if (out[k] !== undefined) out[k] = out[k] === null ? null : JSON.stringify(out[k]);
+  return out;
+}
+function applicationRow(r: Record<string, unknown> | undefined) {
+  if (!r) return r;
+  const out = { ...r };
+  for (const k of JSON_COLUMNS) {
+    try { out[k] = typeof r[k] === "string" ? JSON.parse(r[k] as string) : null; } catch { out[k] = null; }
+  }
+  return out;
+}
+
+// The decider and verifier come from the signed-in user, never the client. Reopening clears the decision.
+function applicationStamps(c: Context<Env>, d: ApplicationData, before?: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const userId = c.get("user").id;
+  if (d.status && d.status !== before?.status) {
+    const decided = d.status === "approved" || d.status === "declined";
+    out.decided_at = decided ? new Date().toISOString().slice(0, 19).replace("T", " ") : null;
+    out.decided_by = decided ? userId : null;
+  }
+  if (d.income_verification_status && d.income_verification_status !== before?.income_verification_status) {
+    out.verified_by = d.income_verification_status === "verified" ? userId : null;
+  }
+  return out;
+}
 
 app.get("/api/applications", async (c) => {
   const status = c.req.query("status");
@@ -1665,39 +1765,29 @@ app.get("/api/applications", async (c) => {
     where.push("(a.first_name LIKE ? OR a.last_name LIKE ? OR a.email LIKE ? OR a.phone LIKE ?)");
     params.push(like, like, like, like);
   }
-  const rows = await query(
-    `SELECT a.*, u.name as unit_name, u.property_id as property_id, p.name as property_name
-     FROM applications a
-     LEFT JOIN units u ON u.id = a.unit_id
-     LEFT JOIN properties p ON p.id = u.property_id
+  const rows = await query<Record<string, unknown>>(
+    `${APPLICATION_SELECT}
      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
      ORDER BY a.created_at DESC`,
     params,
   );
-  return c.json({ applications: rows });
+  return c.json({ applications: rows.map(applicationRow) });
 });
 
 app.post("/api/applications", async (c) => {
   const parsed = await parseJson(c, ApplicationInput);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const d = parsed.data;
+  const d = { ...parsed.data, status: parsed.data.status ?? "new" };
+  // Column names come from the Zod schema's keys, never from the request.
+  const cols = { ...applicationColumns(d), ...applicationStamps(c, d) };
+  const names = Object.keys(cols).filter((k) => cols[k] !== undefined);
   const result = await run(
-    `INSERT INTO applications (unit_id, first_name, last_name, email, phone, monthly_income, employer, desired_move_in, follow_up_date, status, notes, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-    [
-      d.unit_id ?? null, d.first_name, d.last_name,
-      d.email ?? null, d.phone ?? null, d.monthly_income ?? null, d.employer ?? null,
-      d.desired_move_in ?? null, d.follow_up_date ?? null, d.status ?? "new", d.notes ?? null,
-    ],
+    `INSERT INTO applications (${names.join(", ")}, updated_at) VALUES (${names.map(() => "?").join(", ")}, datetime('now'))`,
+    names.map((k) => cols[k] ?? null),
   );
-  const row = await get(
-    `SELECT a.*, u.name as unit_name, u.property_id as property_id, p.name as property_name
-     FROM applications a LEFT JOIN units u ON u.id = a.unit_id LEFT JOIN properties p ON p.id = u.property_id
-     WHERE a.id = ?`,
-    [result.lastInsertRowid],
-  );
+  const row = await get<Record<string, unknown>>(`${APPLICATION_SELECT} WHERE a.id = ?`, [result.lastInsertRowid]);
   await logActivity(c, "application", result.lastInsertRowid, "create", `${d.first_name} ${d.last_name}`);
-  return c.json({ application: row }, 201);
+  return c.json({ application: applicationRow(row) }, 201);
 });
 
 app.put("/api/applications/:id", async (c) => {
@@ -1705,21 +1795,17 @@ app.put("/api/applications/:id", async (c) => {
   if (!id) return c.json({ error: "Invalid ID" }, 400);
   const parsed = await parseJson(c, ApplicationInput.partial());
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const { sets, params } = buildUpdate(parsed.data);
+  const before = await get<Record<string, unknown>>("SELECT * FROM applications WHERE id = ?", [id]);
+  if (!before) return c.json({ error: "Not found" }, 404);
+  const cols = { ...applicationColumns(parsed.data), ...applicationStamps(c, parsed.data, before) };
+  const { sets, params } = buildUpdate(cols);
   if (!sets.length) return c.json({ error: "No fields" }, 400);
   sets.push("updated_at = datetime('now')");
   params.push(id);
-  const before = await get<Record<string, unknown>>("SELECT * FROM applications WHERE id = ?", [id]);
-  const r = await run(`UPDATE applications SET ${sets.join(", ")} WHERE id = ?`, params);
-  if (!r.changes) return c.json({ error: "Not found" }, 404);
-  await logActivity(c, "application", id, "update", fullName(before), diff(before, parsed.data));
-  const row = await get(
-    `SELECT a.*, u.name as unit_name, u.property_id as property_id, p.name as property_name
-     FROM applications a LEFT JOIN units u ON u.id = a.unit_id LEFT JOIN properties p ON p.id = u.property_id
-     WHERE a.id = ?`,
-    [id],
-  );
-  return c.json({ application: row });
+  await run(`UPDATE applications SET ${sets.join(", ")} WHERE id = ?`, params);
+  await logActivity(c, "application", id, "update", fullName(before), diff(before, cols));
+  const row = await get<Record<string, unknown>>(`${APPLICATION_SELECT} WHERE a.id = ?`, [id]);
+  return c.json({ application: applicationRow(row) });
 });
 
 app.delete("/api/applications/:id", async (c) => {
@@ -1978,6 +2064,7 @@ const SettingsInput = z.object({
   currency: z.string().regex(/^[A-Z]{3}$/),
   renewal_notice_days: z.coerce.number().int().min(1).max(365),
   maintenance_approval_threshold: z.coerce.number().min(0),
+  application_income_multiple: z.coerce.number().min(0).max(10),
 }).partial().strict();
 
 app.put("/api/settings", async (c) => {

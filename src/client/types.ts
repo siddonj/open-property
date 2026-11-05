@@ -324,7 +324,75 @@ export interface Application {
   unit_name?: string | null;
   property_id?: number | null;
   property_name?: string | null;
+  unit_market_rent?: number | null;
+  // Complete rental application (docs/sdlc/changes/rental-application/spec.md). Money in cents.
+  former_names?: string | null;
+  lease_term_months?: number | null;
+  quoted_rent_cents?: number | null;
+  quoted_deposit_cents?: number | null;
+  referral_source?: string | null;
+  active_military?: boolean | number | null;
+  smoker?: boolean | number | null;
+  co_applicants?: CoApplicant[] | null;
+  occupants?: Occupant[] | null;
+  emergency_contact?: EmergencyContact | null;
+  residences?: Residence[] | null;
+  incomes?: IncomeSource[] | null;
+  pets?: Pet[] | null;
+  vehicles?: Vehicle[] | null;
+  personal_references?: Reference[] | null;
+  disclosures?: Partial<Record<DisclosureKey, Disclosure>> | null;
+  guarantor?: Guarantor | null;
+  fee_cents?: number | null;
+  fee_paid_on?: string | null;
+  deposit_cents?: number | null;
+  deposit_paid_on?: string | null;
+  deposit_outcome?: DepositOutcome | null;
+  deposit_refunded_on?: string | null;
+  refund_address?: string | null;
+  criteria_notice_on?: string | null;
+  criteria_ack_on?: string | null;
+  authorized_on?: string | null;
+  certified_on?: string | null;
+  completed_on?: string | null;
+  decided_at?: string | null;
+  decided_by_name?: string | null;
+  conditions?: string | null;
+  decline_reason?: DeclineReason | null;
+  decline_notes?: string | null;
+  notified_at?: string | null;
+  notified_method?: NotifiedMethod | null;
+  income_verification_status?: IncomeVerificationStatus;
+  verified_income_cents?: number | null;
+  verified_on?: string | null;
+  verified_by_name?: string | null;
 }
+
+export interface CoApplicant { name: string; email?: string | null; phone?: string | null }
+export interface Occupant { name: string; minor: boolean }
+export interface EmergencyContact { name?: string | null; phone?: string | null; relationship?: string | null }
+export interface Residence {
+  address?: string | null; from?: string | null; to?: string | null; rent_cents?: number | null;
+  landlord_name?: string | null; landlord_phone?: string | null; reason?: string | null;
+}
+export type IncomeType = "employment" | "self_employment" | "benefits" | "child_support" | "other";
+export interface IncomeSource {
+  earner?: string | null; type: IncomeType; employer?: string | null; position?: string | null; start?: string | null;
+  monthly_cents?: number | null; supervisor?: string | null; supervisor_phone?: string | null;
+}
+export interface Pet {
+  type?: string | null; breed?: string | null; weight_lbs?: number | null; age?: string | null;
+  neutered?: boolean | null; vaccinated?: boolean | null;
+}
+export interface Vehicle { year?: string | null; make?: string | null; model?: string | null; plate?: string | null; state?: string | null }
+export interface Reference { name?: string | null; phone?: string | null; relationship?: string | null }
+export type DisclosureKey = "evicted" | "asked_to_move" | "broke_lease" | "bankruptcy" | "convicted" | "sex_offender" | "pending_charges";
+export interface Disclosure { answer: boolean | null; explanation?: string | null }
+export interface Guarantor { name?: string | null; phone?: string | null; email?: string | null; monthly_cents?: number | null }
+export type DepositOutcome = "held" | "applied" | "refunded" | "forfeited";
+export type DeclineReason = "income" | "rental_history" | "credit" | "criminal_history" | "incomplete" | "false_information" | "unit_unavailable" | "other";
+export type NotifiedMethod = "phone" | "mail" | "email" | "in_person";
+export type IncomeVerificationStatus = "not_started" | "requested" | "verified" | "unable_to_verify" | "waived";
 
 export interface DashboardCharge {
   id: number; period: string; due_date: string; balance: number;

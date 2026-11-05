@@ -265,6 +265,7 @@ function PolicyTab() {
   const [currency, setCurrency] = useState(app.settings.currency);
   const [renewalDays, setRenewalDays] = useState(String(app.settings.renewal_notice_days));
   const [approvalThreshold, setApprovalThreshold] = useState(app.settings.maintenance_approval_threshold ? String(app.settings.maintenance_approval_threshold) : "");
+  const [incomeMultiple, setIncomeMultiple] = useState(String(app.settings.application_income_multiple));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -274,6 +275,7 @@ function PolicyTab() {
     setCurrency(app.settings.currency);
     setRenewalDays(String(app.settings.renewal_notice_days));
     setApprovalThreshold(app.settings.maintenance_approval_threshold ? String(app.settings.maintenance_approval_threshold) : "");
+    setIncomeMultiple(String(app.settings.application_income_multiple));
   }, [app.settings]);
 
   async function save() {
@@ -286,6 +288,7 @@ function PolicyTab() {
         currency: currency.trim().toUpperCase() || "USD",
         renewal_notice_days: Math.min(365, Math.max(1, parseInt(renewalDays, 10) || 60)),
         maintenance_approval_threshold: Math.max(0, parseFloat(approvalThreshold) || 0),
+        application_income_multiple: Math.min(10, Math.max(0, parseFloat(incomeMultiple) || 0)),
       });
     } catch (err) {
       app.setError((err as Error).message);
@@ -336,6 +339,16 @@ function PolicyTab() {
         <div>
           <Label htmlFor="s-approval">Approval threshold</Label>
           <Input id="s-approval" type="number" min={0} placeholder="Off" value={approvalThreshold} onChange={(e) => setApprovalThreshold(e.target.value)} />
+        </div>
+      </div>
+      <h2 className="mb-1 mt-6 text-sm font-semibold">Application criteria</h2>
+      <p className="mb-4 text-xs text-muted-foreground">
+        Household gross monthly income should be at least this many times the monthly rent. Applications show whether they meet it. Set 0 to turn the check off.
+      </p>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div>
+          <Label htmlFor="s-income-multiple">Income × rent</Label>
+          <Input id="s-income-multiple" type="number" min={0} max={10} step="0.1" value={incomeMultiple} onChange={(e) => setIncomeMultiple(e.target.value)} />
         </div>
       </div>
       <div className="mt-4">

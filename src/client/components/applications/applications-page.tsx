@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { FileText, Plus, Search, UserPlus } from "lucide-react";
 import { useApp } from "@/context";
 import { formatDate, formatMoney, takeIdParam, toIsoDate } from "@/lib/utils";
+import { decideBy, householdIncomeCents, incomeCheck, refundFlags } from "@/lib/applications";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -93,6 +94,7 @@ export function ApplicationsPage({ navigate }: { navigate: (to: string) => void 
       phone: a.phone,
       employer: a.employer,
       monthly_income: a.monthly_income,
+      emergency_contact: [a.emergency_contact?.name, a.emergency_contact?.phone].filter(Boolean).join(" · ") || null,
     });
   }
 
@@ -145,6 +147,7 @@ export function ApplicationsPage({ navigate }: { navigate: (to: string) => void 
                   <TableHead>Property · Unit</TableHead>
                   <TableHead>Desired move-in</TableHead>
                   <TableHead>Follow-up</TableHead>
+                  <TableHead>Decide by</TableHead>
                   <TableHead className="text-right">Income</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead />
@@ -174,11 +177,14 @@ export function ApplicationsPage({ navigate }: { navigate: (to: string) => void 
                     </TableCell>
                     <TableCell className="text-sm">{a.desired_move_in ? formatDate(a.desired_move_in) : "—"}</TableCell>
                     <TableCell><FollowUpCell application={a} today={today} /></TableCell>
+                    <TableCell><DecideByCell application={a} today={today} /></TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {a.monthly_income ? `${formatMoney(a.monthly_income, app.settings.currency)}/mo` : "—"}
+                      {householdIncomeCents(a) ? `${formatMoney(householdIncomeCents(a)! / 100, app.settings.currency)}/mo` : "—"}
+                      <IncomeRatio application={a} multiple={app.settings.application_income_multiple} />
                     </TableCell>
                     <TableCell>
                       <Badge variant={STATUS_TONE[a.status] as never} className="capitalize">{a.status}</Badge>
+                      <RefundNote application={a} />
                     </TableCell>
                     <TableCell className="text-right">
                       {a.status === "approved" && (
@@ -213,6 +219,32 @@ export function ApplicationsPage({ navigate }: { navigate: (to: string) => void 
       />
     </div>
   );
+}
+
+// Tex. Prop. Code §92.352: no decision within 7 days of a complete application counts as a rejection.
+function DecideByCell({ application: a, today }: { application: Application; today: string }) {
+  if (!(a.status === "new" || a.status === "screening")) return <span className="text-xs text-muted-foreground">—</span>;
+  const due = decideBy(a.completed_on);
+  if (!due) return <span className="text-xs text-muted-foreground">Not complete</span>;
+  if (due < today) return <span className="text-sm font-medium text-destructive">Past due · {formatDate(due)}</span>;
+  return <span className="text-sm">{formatDate(due)}</span>;
+}
+
+function IncomeRatio({ application, multiple }: { application: Application; multiple: number }) {
+  const check = incomeCheck(application, multiple);
+  if (!check) return null;
+  return (
+    <div className={`text-xs ${check.meets ? "text-emerald-700" : "text-destructive"}`}>
+      {check.ratio.toFixed(1)}× rent{check.meets ? "" : ` · below ${multiple}×`}
+    </div>
+  );
+}
+
+function RefundNote({ application }: { application: Application }) {
+  const owed = refundFlags(application);
+  if (!owed.deposit && !owed.fee) return null;
+  const what = owed.deposit && owed.fee ? "Fee and deposit to refund" : owed.deposit ? "Deposit to refund" : "Fee to refund";
+  return <div className="mt-1 text-xs font-medium text-amber-700">{what}</div>;
 }
 
 function FollowUpCell({ application: a, today }: { application: Application; today: string }) {

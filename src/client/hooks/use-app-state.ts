@@ -54,6 +54,8 @@ export interface AppSettings {
   renewal_notice_days: number;
   /** 0 = approval disabled. */
   maintenance_approval_threshold: number;
+  /** Applicant income must be at least this many times the monthly rent. */
+  application_income_multiple: number;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -63,6 +65,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   currency: "USD",
   renewal_notice_days: 60,
   maintenance_approval_threshold: 0,
+  application_income_multiple: 3,
 };
 
 function parseSettings(raw: Record<string, string>): AppSettings {
@@ -77,6 +80,7 @@ function parseSettings(raw: Record<string, string>): AppSettings {
     currency: raw.currency || DEFAULT_SETTINGS.currency,
     renewal_notice_days: num("renewal_notice_days", DEFAULT_SETTINGS.renewal_notice_days),
     maintenance_approval_threshold: num("maintenance_approval_threshold", DEFAULT_SETTINGS.maintenance_approval_threshold),
+    application_income_multiple: num("application_income_multiple", DEFAULT_SETTINGS.application_income_multiple),
   };
 }
 
